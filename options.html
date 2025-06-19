@@ -23,7 +23,10 @@
       color: #334155;
       margin-bottom: 8px;
     }
-    input[type="text"] {
+    .input-group {
+      margin-bottom: 16px;
+    }
+    input[type="text"], select {
       width: 100%;
       padding: 10px;
       font-size: 1rem;
@@ -31,6 +34,17 @@
       border-radius: 8px;
       margin-bottom: 16px;
       box-sizing: border-box;
+    }
+    select {
+      background-color: white; /* Ensure select has a background */
+      color: #334155; /* Text color for select */
+      cursor: pointer; /* Indicate it's interactive */
+    }
+    /* Style for the dropdown arrow (browser-dependent) */
+    select:focus {
+      outline: none;
+      border-color: #4F46E5; /* Highlight focus */
+      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.3); /* Focus ring */
     }
     .button-container {
       display: flex;
@@ -73,11 +87,30 @@
 </head>
 <body>
   <h1>Gemini Phishing Checker Setup</h1>
+  <div class="input-group">
+    <label for="modelSelect">Select Model:</label>
+    <select id="modelSelect">
+      <option value="gemini">Gemini</option>
+      <option value="anthropic">Anthropic (Claude)</option>
+      <option value="chatgpt">OpenAI (ChatGPT)</option>
+      <option value="ollama">Ollama (Local)</option>
+    </select>
+  </div>
   <label for="apiKey">Gemini API Key:</label>
   <input type="text" id="apiKey" placeholder="Enter your Gemini API key" />
+
+  <label for="anthropicApiKey">Anthropic (Claude) API Key:</label>
+  <input type="text" id="anthropicApiKey" placeholder="Enter your Anthropic API key" />
+
+  <label for="chatgptApiKey">OpenAI (ChatGPT) API Key:</label>
+  <input type="text" id="chatgptApiKey" placeholder="Enter your OpenAI API key" />
+
+  <label for="ollamaApiEndpoint">Ollama API Endpoint:</label>
+  <input type="text" id="ollamaApiEndpoint" placeholder="e.g., http://localhost:11434" />
+
   <div class="button-container">
-    <button id="saveButton">Save API Key</button>
-    <button id="clearButton">Clear API Key</button>
+    <button id="saveButton">Save Settings</button>
+    <button id="clearButton">Clear All Settings</button>
   </div>
   <div id="status"></div>
   <script src="options.js"></script>
