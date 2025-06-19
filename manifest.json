@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Phishing Site Checker (Demo)",
+  "version": "0.3.2",
+  "description": "Uses Gemini API (URL + Screenshot) to check if a visited site might be phishing, with caching. (Proof of Concept - Read Warnings!)",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "notifications",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://generativelanguage.googleapis.com/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}
