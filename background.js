@@ -128,7 +128,7 @@ async function checkUrlAndScreenshotAndCache(url, hostname, tabId) {
   // Specific checks will happen within each model's block.
   if (!providerConfig) {
     console.error(`Could not retrieve configuration for selected model: ${selectedModel}.`);
-    await setCachedStatus(hostname, 'safe', `Analysis skipped: Configuration error for ${selectedModel}.`);
+    await showAnalysisFailedNotification(tabId, url, `Configuration error for model: ${selectedModel}.`);
     // Consider opening options page: await chrome.runtime.openOptionsPage();
     return false;
   }
@@ -142,14 +142,14 @@ async function checkUrlAndScreenshotAndCache(url, hostname, tabId) {
     console.log(`Screenshot captured successfully for ${url}`);
   } catch (error) {
     console.error(`Failed to capture screenshot for ${url} after delay:`, error);
-    await setCachedStatus(hostname, 'safe', `Analysis skipped: Screenshot failed - ${error.message}`);
+    await showAnalysisFailedNotification(tabId, url, `Screenshot capture failed.`);
     return false;
   }
 
   const base64ImageData = screenshotDataUrl.split(',')[1];
   if (!base64ImageData) {
     console.error(`Failed to extract base64 data from screenshot for ${url}`);
-    await setCachedStatus(hostname, 'safe', 'Analysis skipped: Failed to process screenshot data.');
+    await showAnalysisFailedNotification(tabId, url, 'Failed to process screenshot data.');
     return false;
   }
 
@@ -172,7 +172,7 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
   if (selectedModel === 'gemini') {
     if (!providerConfig || !providerConfig.apiKey) {
       console.error('Gemini API key not set. Please configure it in the extension options.');
-      await setCachedStatus(hostname, 'safe', 'Analysis skipped: Gemini API Key not configured.');
+      await showAnalysisFailedNotification(tabId, url, 'Gemini API key missing or invalid.');
       // await chrome.runtime.openOptionsPage(); // Consider prompting user
       return false;
     }
@@ -207,8 +207,8 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
         let errorBody = await response.text();
         try { errorBody = JSON.parse(errorBody); } catch(e) { /* Ignore */ }
         console.error(`Gemini API Error ${response.status}:`, errorBody);
-        reason = `Gemini API Error: ${response.status}`;
-        // isPhishing remains false
+        await showAnalysisFailedNotification(tabId, url, `Gemini API error (${response.status}).`);
+        return false;
       } else {
         const data = await response.json();
         if (data.candidates && data.candidates.length > 0 && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts.length > 0) {
@@ -228,30 +228,33 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
                 isPhishing = false;
                 reason = resultText.substring(resultText.indexOf(':') > -1 ? resultText.indexOf(':') + 1 : 2).trim() || "No clear phishing indicators (Gemini).";
             } else {
-                isPhishing = false; // Default to safe if parsing fails
-                reason = `Could not determine YES/NO from Gemini response: ${resultText}`;
+                reason = `Could not determine YES/NO from Gemini response: ${resultText.substring(0, 200)}`;
+                console.warn(reason);
+                await showAnalysisFailedNotification(tabId, url, 'Could not understand AI response.');
+                return false;
             }
             console.log(`Gemini Fallback Parsed Multimodal Result: ${isPhishing ? 'YES' : 'NO'}. Reason: ${reason}`);
+            // This path leads to successful caching at the end.
           }
         } else if (data.promptFeedback && data.promptFeedback.blockReason) {
-          reason = `Analysis blocked by Gemini safety filters: ${data.promptFeedback.blockReason}. Assuming safe.`;
-          console.warn(`Gemini multimodal request blocked for ${url}. Reason: ${reason}`);
-          isPhishing = false;
+          console.warn(`Gemini multimodal request blocked for ${url}. Reason: ${data.promptFeedback.blockReason}`);
+          await showAnalysisFailedNotification(tabId, url, `Analysis blocked by safety filters.`);
+          return false;
         } else {
-          reason = "Could not parse Gemini response structure or response was empty. Assuming safe.";
-          console.warn(reason, data);
-          isPhishing = false;
+          console.warn("Could not parse Gemini response structure or response was empty for URL:", url, data);
+          await showAnalysisFailedNotification(tabId, url, 'Could not parse AI response.');
+          return false;
         }
       }
     } catch (error) {
       console.error(`Network or other error calling Gemini API (multimodal) for ${url}:`, error);
-      reason = `Error during Gemini API call: ${error.message}. Assuming safe.`;
-      isPhishing = false;
+      await showAnalysisFailedNotification(tabId, url, `AI Provider API call failed.`);
+      return false;
     }
   } else if (selectedModel === 'anthropic') {
     if (!providerConfig || !providerConfig.apiKey) {
       console.error('Anthropic API key not set. Please configure it in the extension options.');
-      await setCachedStatus(hostname, 'safe', 'Analysis skipped: Anthropic API Key not configured.');
+      await showAnalysisFailedNotification(tabId, url, 'Anthropic API key missing or invalid.');
       return false;
     }
     try {
@@ -294,11 +297,14 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
         console.error(`Anthropic API Error ${response.status}:`, errorBodyText);
         try {
             const errorBodyJson = JSON.parse(errorBodyText);
-            reason = `Anthropic API Error: ${response.status} - ${errorBodyJson?.error?.message || errorBodyText}`;
+            // reason = `Anthropic API Error: ${response.status} - ${errorBodyJson?.error?.message || errorBodyText}`; // Technical reason
+            console.error(`Anthropic API Error ${response.status}: ${errorBodyJson?.error?.message || errorBodyText}`);
         } catch (e) {
-            reason = `Anthropic API Error: ${response.status} - ${errorBodyText}`;
+            // reason = `Anthropic API Error: ${response.status} - ${errorBodyText}`; // Technical reason
+            console.error(`Anthropic API Error ${response.status}: ${errorBodyText}`);
         }
-        isPhishing = false;
+        await showAnalysisFailedNotification(tabId, url, `Anthropic API error (${response.status}).`);
+        return false;
       } else {
         const data = await response.json();
         console.log(`Anthropic Raw Result for ${url}:`, JSON.stringify(data));
@@ -320,30 +326,33 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
                 isPhishing = false;
                 reason = resultText.substring(resultText.indexOf(':') > -1 ? resultText.indexOf(':') + 1 : 2).trim() || "No clear phishing indicators (Anthropic).";
             } else {
-                isPhishing = false; // Default to safe if parsing fails
-                reason = `Could not determine YES/NO from Anthropic response: ${resultText}`;
+                reason = `Could not determine YES/NO from Anthropic response: ${resultText.substring(0, 200)}`;
+                console.warn(reason);
+                await showAnalysisFailedNotification(tabId, url, 'Could not understand AI response.');
+                return false;
             }
             console.log(`Anthropic Fallback Parsed Result: ${isPhishing ? 'YES' : 'NO'}. Reason: ${reason}`);
+            // This path leads to successful caching at the end.
           }
         } else if (data.stop_reason === 'max_tokens') {
-            reason = "Anthropic analysis stopped due to max tokens. Assuming safe as full analysis not completed.";
-            console.warn(reason, data);
-            isPhishing = false;
+            console.warn("Anthropic analysis stopped due to max_tokens for URL:", url, data);
+            await showAnalysisFailedNotification(tabId, url, 'AI analysis stopped due to token limit.');
+            return false;
         } else {
-          reason = "Could not parse Anthropic response structure or content was empty. Assuming safe.";
-          console.warn(reason, data);
-          isPhishing = false;
+          console.warn("Could not parse Anthropic response structure or content was empty for URL:", url, data);
+          await showAnalysisFailedNotification(tabId, url, 'Could not parse AI response.');
+          return false;
         }
       }
     } catch (error) {
       console.error(`Network or other error calling Anthropic API for ${url}:`, error);
-      reason = `Error during Anthropic API call: ${error.message}. Assuming safe.`;
-      isPhishing = false;
+      await showAnalysisFailedNotification(tabId, url, `AI Provider API call failed.`);
+      return false;
     }
   } else if (selectedModel === 'chatgpt') {
     if (!providerConfig || !providerConfig.apiKey) {
       console.error('OpenAI (ChatGPT) API key not set. Please configure it in the extension options.');
-      await setCachedStatus(hostname, 'safe', 'Analysis skipped: OpenAI API Key not configured.');
+      await showAnalysisFailedNotification(tabId, url, 'OpenAI API key missing or invalid.');
       return false;
     }
     try {
@@ -380,9 +389,10 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => null); // Try to parse JSON error, otherwise null
-        console.error(`OpenAI API Error ${response.status}:`, errorData || await response.text());
-        reason = `OpenAI API Error: ${response.status} - ${errorData?.error?.message || (errorData || 'Unknown error')}`;
-        isPhishing = false;
+        const errorMessage = errorData?.error?.message || (typeof errorData === 'string' ? errorData : 'Unknown error');
+        console.error(`OpenAI API Error ${response.status}:`, errorMessage);
+        await showAnalysisFailedNotification(tabId, url, `OpenAI API error (${response.status}).`);
+        return false;
       } else {
         const data = await response.json();
         console.log(`OpenAI Raw Result for ${url}:`, JSON.stringify(data));
@@ -404,31 +414,35 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
                 isPhishing = false;
                 reason = resultText.substring(resultText.indexOf(':') > -1 ? resultText.indexOf(':') + 1 : 2).trim() || "No clear phishing indicators (OpenAI).";
             } else {
-                isPhishing = false; // Default to safe
-                reason = `Could not determine YES/NO from OpenAI response: ${resultText}`;
+                reason = `Could not determine YES/NO from OpenAI response: ${resultText.substring(0, 200)}`;
+                console.warn(reason);
+                await showAnalysisFailedNotification(tabId, url, 'Could not understand AI response.');
+                return false;
             }
             console.log(`OpenAI Fallback Parsed Result: ${isPhishing ? 'YES' : 'NO'}. Reason: ${reason}`);
+             // This path leads to successful caching at the end.
           }
           // Check finish reason if needed
           if (data.choices[0].finish_reason === 'length') {
             console.warn(`OpenAI analysis for ${url} may have been truncated due to max_tokens.`);
-            // Potentially append to reason or handle as less certain
+            // Potentially append to reason or handle as less certain, but main response is still processed.
+            // No notification for this unless it's the *only* issue.
           }
         } else {
-          reason = "Could not parse OpenAI response structure or content was empty. Assuming safe.";
-          console.warn(reason, data);
-          isPhishing = false;
+          console.warn("Could not parse OpenAI response structure or content was empty for URL:", url, data);
+          await showAnalysisFailedNotification(tabId, url, 'Could not parse AI response.');
+          return false;
         }
       }
     } catch (error) {
       console.error(`Network or other error calling OpenAI API for ${url}:`, error);
-      reason = `Error during OpenAI API call: ${error.message}. Assuming safe.`;
-      isPhishing = false;
+      await showAnalysisFailedNotification(tabId, url, `AI Provider API call failed.`);
+      return false;
     }
   } else if (selectedModel === 'ollama') {
     if (!providerConfig || !providerConfig.endpoint) {
       console.error('Ollama API endpoint not set. Please configure it in the extension options.');
-      await setCachedStatus(hostname, 'safe', 'Analysis skipped: Ollama API endpoint not configured.');
+      await showAnalysisFailedNotification(tabId, url, 'Ollama API endpoint not configured.');
       return false;
     }
     try {
@@ -451,8 +465,8 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`Ollama API Error ${response.status}:`, errorText);
-        reason = `Ollama API Error: ${response.status} - ${errorText.substring(0,100)}`; // Truncate long errors
-        isPhishing = false;
+        await showAnalysisFailedNotification(tabId, url, `Ollama API error (${response.status}).`);
+        return false;
       } else {
         const data = await response.json();
         console.log(`Ollama Raw Result for ${url}:`, JSON.stringify(data));
@@ -474,36 +488,147 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
                 isPhishing = false;
                 reason = resultText.substring(resultText.indexOf(':') > -1 ? resultText.indexOf(':') + 1 : 2).trim() || "No clear phishing indicators (Ollama).";
             } else {
-                isPhishing = false; // Default to safe
-                reason = `Could not determine YES/NO from Ollama response: ${resultText}`;
+                reason = `Could not determine YES/NO from Ollama response: ${resultText.substring(0,200)}`;
+                console.warn(reason);
+                await showAnalysisFailedNotification(tabId, url, 'Could not understand AI response.');
+                return false;
             }
             console.log(`Ollama Fallback Parsed Result: ${isPhishing ? 'YES' : 'NO'}. Reason: ${reason}`);
+            // This path leads to successful caching at the end.
           }
         } else {
-          reason = "Could not parse Ollama response structure or 'response' field was empty. Assuming safe.";
-          console.warn(reason, data);
-          isPhishing = false;
+          console.warn("Could not parse Ollama response structure or 'response' field was empty for URL:", url, data);
+          await showAnalysisFailedNotification(tabId, url, 'Could not parse AI response.');
+          return false;
         }
       }
     } catch (error) {
       console.error(`Network or other error calling Ollama API for ${url}:`, error);
+      let userFriendlyReason = `Local AI server call failed.`; // Generic
       if (error.message.includes('Failed to fetch')) {
-        reason = `Ollama connection error: Could not connect to endpoint at ${providerConfig.endpoint}. Please ensure Ollama is running and the endpoint is correct.`;
-      } else {
-        reason = `Error during Ollama API call: ${error.message}. Assuming safe.`;
+        userFriendlyReason = `Ollama connection error: Could not connect to endpoint.`;
       }
-      isPhishing = false;
+      await showAnalysisFailedNotification(tabId, url, userFriendlyReason);
+      return false;
     }
   } else {
     console.warn(`Unknown model selected: ${selectedModel}. Defaulting to safe.`);
-    reason = `Analysis skipped: Unknown model '${selectedModel}'.`;
-    isPhishing = false;
+    await showAnalysisFailedNotification(tabId, url, `Analysis skipped: Unknown model '${selectedModel}'.`);
+    return false;
   }
 
-  const cacheStatusToSet = isPhishing ? 'phishing' : 'safe';
-  await setCachedStatus(hostname, cacheStatusToSet, reason);
+  // Only cache if a definitive YES/NO was obtained from the AI.
+  // All error paths or unparsable response paths should have returned false by now.
+  if (reason !== "Analysis not performed due to model selection or error." && (isPhishing || reason.startsWith("No clear phishing indicators") || reason.startsWith("Suspicious indicators detected"))) {
+    const cacheStatusToSet = isPhishing ? 'phishing' : 'safe';
+    await setCachedStatus(hostname, cacheStatusToSet, reason);
+  } else {
+    // This case should ideally not be reached if all error paths are handled above.
+    // If it is, it means the 'reason' was not updated by a successful parsing or a specific error message.
+    console.warn(`Analysis for ${url} concluded without a definitive phishing status or specific error. Initial reason: "${reason}". Not caching.`);
+    await showAnalysisFailedNotification(tabId, url, 'Analysis inconclusive or unexpected error.');
+    return false;
+  }
   return isPhishing;
 }
+
+
+/**
+ * THIS FUNCTION IS INJECTED INTO THE WEBPAGE.
+ * Creates and displays a small, non-intrusive notification for analysis failures.
+ * @param {string} reason User-friendly reason for the failure.
+ */
+function displayFailureNotificationOnPage(reason) {
+  const NOTIFICATION_ID = 'aquarium-failure-notification';
+  const existingNotification = document.getElementById(NOTIFICATION_ID);
+  if (existingNotification) {
+    existingNotification.remove(); // Remove any existing one first
+  }
+
+  const notification = document.createElement('div');
+  notification.id = NOTIFICATION_ID;
+  notification.style.position = 'fixed';
+  notification.style.bottom = '20px';
+  notification.style.right = '20px';
+  notification.style.padding = '15px';
+  notification.style.backgroundColor = '#4A5568'; // Tailwind gray-700
+  notification.style.color = 'white';
+  notification.style.borderRadius = '8px';
+  notification.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+  notification.style.zIndex = '2147483647';
+  notification.style.fontFamily = 'Arial, sans-serif';
+  notification.style.fontSize = '14px';
+  notification.style.opacity = '0.95';
+  notification.style.transition = 'opacity 0.5s ease-in-out';
+  notification.style.maxWidth = '300px';
+  notification.style.textAlign = 'left';
+  notification.style.lineHeight = '1.4';
+
+  const closeButton = document.createElement('span');
+  closeButton.id = 'aquarium-failure-notification-close';
+  closeButton.innerHTML = '&times;';
+  closeButton.style.float = 'right';
+  closeButton.style.marginLeft = '10px';
+  closeButton.style.cursor = 'pointer';
+  closeButton.style.fontWeight = 'bold';
+  closeButton.style.fontSize = '16px';
+
+  const messageSpan = document.createElement('span');
+  messageSpan.textContent = "Aquarium: Analysis could not be completed for this page. ";
+
+  const reasonSpan = document.createElement('small');
+  reasonSpan.style.opacity = '0.8';
+  reasonSpan.textContent = `(${reason})`;
+
+  notification.appendChild(closeButton);
+  notification.appendChild(messageSpan);
+  notification.appendChild(document.createElement('br'));
+  notification.appendChild(reasonSpan);
+
+  if (document.body) { // Make sure body is available
+    document.body.appendChild(notification);
+  } else {
+    console.warn("Aquarium: document.body not available for failure notification.");
+    return; // Can't append
+  }
+
+  let timeoutId = setTimeout(() => {
+    if (document.getElementById(NOTIFICATION_ID)) {
+      notification.remove();
+    }
+  }, 8000); // Auto-dismiss after 8 seconds
+
+  closeButton.onclick = () => {
+    clearTimeout(timeoutId);
+    if (document.getElementById(NOTIFICATION_ID)) { // Check again in case it was removed by timeout
+        notification.remove();
+    }
+  };
+
+  // Fade out before removing (optional, but makes auto-dismiss smoother)
+  // This is a bit more complex with setTimeout, so keeping it simple for now.
+}
+
+/**
+ * Injects the failure notification script into the specified tab.
+ * @param {number} tabId The ID of the tab.
+ * @param {string} pageUrl The URL of the page (for logging).
+ * @param {string} userFriendlyReason The reason to display in the notification.
+ */
+async function showAnalysisFailedNotification(tabId, pageUrl, userFriendlyReason) {
+  console.log(`Attempting to show analysis failed notification on tab ${tabId} for URL ${pageUrl}. Reason: ${userFriendlyReason}`);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: displayFailureNotificationOnPage,
+      args: [userFriendlyReason],
+    });
+  } catch (err) {
+    console.warn(`Failed to inject analysis failure notification script into tab ${tabId} (${pageUrl}):`, err.message);
+    // This can happen on restricted pages (e.g., chrome:// URLs if not filtered before) or if tab is closed.
+  }
+}
+
 
 /**
  * THIS FUNCTION IS INJECTED INTO THE WEBPAGE (Version 2.7 - UI & Reason Refinements)
@@ -737,21 +862,42 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     try {
       hostname = new URL(tab.url).hostname;
     } catch (error) {
-      console.error(`Invalid URL encountered: ${tab.url}`, error);
+      // If URL parsing fails (e.g. for "about:blank"), hostname might not be valid.
+      // We'll catch this with the protocol check anyway if hostname is null/empty.
+      console.warn(`Could not parse hostname from URL: ${tab.url}. Error: ${error.message}`);
+      // hostname remains undefined or as per previous value if any error.
+    }
+
+    const restrictedProtocols = ['devtools:', 'chrome:', 'edge:', 'about:', 'file:'];
+    const currentUrlProtocol = tab.url.split(':')[0] + ':'; // e.g. "http:" or "chrome:"
+
+    if (restrictedProtocols.includes(currentUrlProtocol)) {
+      console.log(`Skipping analysis for restricted URL scheme: ${tab.url} (Protocol: ${currentUrlProtocol})`);
       return;
     }
 
-    if (hostname.includes('generativelanguage.googleapis.com') ||
-        hostname.endsWith('.google.com') ||
-        hostname === 'localhost' ||
-        hostname === '127.0.0.1' ||
-        hostname.endsWith('github.com')
-    ) {
-      console.log(`Skipping analysis for whitelisted/internal URL: ${tab.url}`);
+    // Ensure hostname is valid before domain-based whitelisting
+    if (hostname) {
+      if (hostname.includes('generativelanguage.googleapis.com') ||
+          hostname.endsWith('.google.com') || // Catches accounts.google.com, mail.google.com etc.
+          hostname.endsWith('anthropic.com') || // Whitelist Anthropic
+          hostname.endsWith('openai.com') || // Whitelist OpenAI
+          hostname === 'localhost' ||
+          hostname === '127.0.0.1' ||
+          hostname.endsWith('github.com') // Whitelist GitHub
+      ) {
+        console.log(`Skipping analysis for whitelisted domain: ${tab.url} (Hostname: ${hostname})`);
+        return;
+      }
+    } else if (!tab.url.startsWith('http:') && !tab.url.startsWith('https:')) {
+      // If hostname parsing failed AND it's not an http/https URL,
+      // it's likely a special page we shouldn't process (already caught by protocol, but as a safeguard)
+      console.log(`Skipping analysis for non-HTTP/HTTPS URL with no valid hostname: ${tab.url}`);
       return;
     }
+    // If hostname is null here, it means it's likely a public IP or similar, which should be analyzed.
 
-    const { status: cachedStatus, reason: cachedReason } = await getCachedStatus(hostname);
+    const { status: cachedStatus, reason: cachedReason } = await getCachedStatus(hostname || tab.url); // Use tab.url as fallback for cache key if hostname is bad
 
     let isPhishing = false;
     let reasonForAlert = "Suspicious indicators detected.";
