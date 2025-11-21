@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail Mock</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f6f8fc; }
+        .ha { background: white; padding: 20px; border-bottom: 1px solid #ddd; }
+        h2 { margin: 0; font-size: 1.5em; }
+        .email-body { background: white; padding: 20px; margin-top: 20px; min-height: 300px; }
+    </style>
+</head>
+<body>
+    <div role="main">
+        <div class="ha">
+            <h2 data-thread-perm-id="123">Important Security Alert: Update Account</h2>
+        </div>
+        <div class="email-body">
+            <div class="a3s">
+                <p>Dear User,</p>
+                <p>Your account is at risk. Please click here to verify your identity immediately.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Mock chrome.runtime.sendMessage
+        window.chrome = {
+            runtime: {
+                sendMessage: (msg) => {
+                    console.log("Mock sendMessage called:", msg);
+                    // Simulate finding phishing
+                    return Promise.resolve({ isPhishing: true, reason: "Urgency and generic greeting." });
+                }
+            }
+        };
+    </script>
+
+    <!-- Inject our content script logic manually for testing since we can't load extension in playwright directly easily without building -->
+    <script>
+        // Simplified version of showWarningBanner from content.js for visual verification
+        function showWarningBanner(reason) {
+          if (document.getElementById('gmail-phishing-protector-banner')) return;
+
+          const subjectHeader = document.querySelector('div.ha') || document.querySelector('h2');
+
+          const banner = document.createElement('div');
+          banner.id = 'gmail-phishing-protector-banner';
+          banner.style.cssText = `
+            background-color: #fef2f2;
+            border: 1px solid #ef4444;
+            color: #991b1b;
+            padding: 16px;
+            margin: 10px 20px;
+            border-radius: 6px;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            z-index: 9999;
+            position: relative;
+          `;
+
+          banner.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <div style="flex: 1;">
+              <h3 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #7f1d1d;">Potential Phishing Detected</h3>
+              <p style="margin: 0; font-size: 14px; line-height: 1.5;">We believe this to be a phishing email.</p>
+              <p style="margin: 4px 0 0 0; font-size: 13px; color: #b91c1c;"><strong>Reason:</strong> ${reason}</p>
+            </div>
+            <button id="gpp-dismiss" style="background: transparent; border: none; color: #991b1b; cursor: pointer; font-size: 20px;">&times;</button>
+          `;
+
+          if (subjectHeader && subjectHeader.parentElement) {
+              subjectHeader.parentElement.insertBefore(banner, subjectHeader.nextSibling);
+          }
+
+          document.getElementById('gpp-dismiss').onclick = () => banner.remove();
+        }
+
+        // Trigger it
+        setTimeout(() => showWarningBanner("Mock Phishing Reason: Urgent action required."), 500);
+    </script>
+</body>
+</html>
