@@ -27,26 +27,37 @@ function captureVisibleTabPromise() {
 }
 
 // --- Analysis ---
-async function analyzeWithOllama(text, screenshotDataUrl) {
+async function analyzeWithOllama(text, screenshotDataUrl, sender, links) {
     const config = await getOllamaConfig();
     const base64Image = screenshotDataUrl.split(',')[1];
 
-    const prompt = `You are a cybersecurity expert specializing in phishing detection.
-    Analyze the following email content and the provided screenshot of the email view.
+    // Format the list of links for the prompt
+    const linksList = links && links.length > 0 ? links.join(', ') : "No links found";
+    const senderStr = sender ? `Name: "${sender.name}", Email: "${sender.email}"` : "Unknown";
 
-    Email Content (Excerpt):
-    ${text}
+    const prompt = `You are a cybersecurity expert. Analyze this email for phishing.
 
-    Task: Determine if this email is a phishing attempt.
+DATA:
+- Sender: ${senderStr}
+- Links present in body: [${linksList}]
+- Email Text Start: "${text.replace(/\n/g, ' ').substring(0, 300)}..."
 
-    Respond STRICTLY in the following JSON format:
-    {
-        "isPhishing": boolean,
-        "reason": "string explaining why"
-    }
+INSTRUCTIONS:
+Perform a Step-by-Step analysis:
+1. SENDER CHECK: Does the sender's email domain match the company they claim to be (in the text/screenshot)? (e.g. "Amazon Support" using @gmail.com is PHISHING).
+2. LINK CHECK: Do the links point to the official domain of the sender? (e.g. claiming "Netflix" but linking to "update-netflix-account.com" is PHISHING).
+3. URGENCY CHECK: Is there artificial urgency (e.g. "Account suspended", "24 hours to reply")?
 
-    If you are unsure, lean towards "false" unless there are clear indicators (urgency, suspicious links, mismatching branding).
-    Keep the reason concise (under 30 words) and professional.`;
+DECISION RULES:
+- IF Sender Domain is generic (@gmail, @yahoo) but claims to be a big corporation -> PHISHING (YES).
+- IF Links go to suspicious domains unrelated to the sender -> PHISHING (YES).
+- IF Branding looks legitimate AND links go to the official domain -> SAFE (NO).
+
+Respond STRICTLY in JSON:
+{
+    "isPhishing": boolean,
+    "reason": "Concise explanation focusing on the specific mismatch (Sender/Link/Content)."
+}`;
 
     try {
         const response = await fetch(`${config.endpoint}/api/generate`, {
@@ -72,7 +83,6 @@ async function analyzeWithOllama(text, screenshotDataUrl) {
             const result = JSON.parse(data.response);
             return result;
         } catch (parseError) {
-            // Fallback if model didn't return strict JSON
             console.warn("Failed to parse JSON from Ollama, attempting heuristic parsing:", data.response);
             const text = data.response.toLowerCase();
             return {
@@ -97,8 +107,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // 1. Capture Screenshot
                 const screenshot = await captureVisibleTabPromise();
 
-                // 2. Call Ollama
-                const analysis = await analyzeWithOllama(message.text, screenshot);
+                // 2. Call Ollama with enhanced data
+                const analysis = await analyzeWithOllama(
+                    message.text,
+                    screenshot,
+                    message.sender,
+                    message.links
+                );
 
                 // 3. Return Result
                 sendResponse(analysis);

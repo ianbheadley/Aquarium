@@ -2,20 +2,42 @@
 // --- Configuration ---
 const CHECK_DELAY_MS = 2000; // Wait for email to render
 
+// --- Extraction Helpers ---
+function extractSenderInfo() {
+    // Gmail typically puts sender name in 'span.gD' and email in 'span.go' (sometimes hidden in attributes)
+    // Or inside <span class="gD" email="example@com">Name</span>
+    const senderElement = document.querySelector('span.gD');
+    if (!senderElement) return { name: 'Unknown', email: 'Unknown' };
+
+    const name = senderElement.innerText || senderElement.textContent;
+    const email = senderElement.getAttribute('email') || 'Unknown';
+    return { name, email };
+}
+
+function extractLinks() {
+    const links = [];
+    const messageBodies = document.querySelectorAll('.a3s');
+    messageBodies.forEach(el => {
+        if (el.offsetParent !== null) {
+             const anchors = el.querySelectorAll('a');
+             anchors.forEach(a => {
+                 try {
+                     if (a.href && !a.href.startsWith('mailto:')) {
+                         const url = new URL(a.href);
+                         links.push(url.hostname);
+                     }
+                 } catch (e) { /* Ignore invalid URLs */ }
+             });
+        }
+    });
+    // Dedup
+    return [...new Set(links)];
+}
+
 // --- Banner Injection ---
 function showWarningBanner(reason) {
-  // Check if banner already exists
   if (document.getElementById('gmail-phishing-protector-banner')) return;
 
-  // Find the email container to inject the banner.
-  // In Gmail, usually the email body is inside a container with role="main" or specific classes.
-  // The best place is often at the top of the email view.
-  // Class '.nH' is common for containers, but generic.
-  // We will try to find the specific email subject/header area.
-  // A safer bet is 'h2[data-thread-perm-id]' parent or '.ha' (header).
-
-  // Let's try to find the main email container.
-  // The container that holds the subject usually has class 'ha'.
   const subjectHeader = document.querySelector('div.ha') || document.querySelector('h2');
 
   const banner = document.createElement('div');
@@ -50,16 +72,13 @@ function showWarningBanner(reason) {
     <button id="gpp-dismiss" style="background: transparent; border: none; color: #991b1b; cursor: pointer; font-size: 20px;">&times;</button>
   `;
 
-  // Injection logic
   if (subjectHeader && subjectHeader.parentElement) {
       subjectHeader.parentElement.insertBefore(banner, subjectHeader.nextSibling);
   } else {
-      // Fallback: Try to prepend to the main role="main"
       const main = document.querySelector('[role="main"]');
       if (main) {
           main.insertBefore(banner, main.firstChild);
       } else {
-          // Absolute fallback (might be ugly but visible)
           document.body.prepend(banner);
       }
   }
@@ -71,11 +90,8 @@ function showWarningBanner(reason) {
 let lastCheckedUrl = '';
 
 async function scanCurrentEmail() {
-    // Only scan if we are looking at an individual email.
-    // Gmail URLs for emails are usually like #inbox/ID or #category/ID
     const hash = window.location.hash;
     if (!hash || (!hash.includes('inbox/') && !hash.includes('category/') && !hash.includes('label/'))) {
-        // Likely in list view or settings
         return;
     }
 
@@ -87,27 +103,31 @@ async function scanCurrentEmail() {
     lastCheckedUrl = window.location.href;
 
     // Extract text content
-    // '.a3s' is a common class for message bodies in Gmail
-    // '.ii' is the wrapper
     let emailBodyText = '';
     const messageBodies = document.querySelectorAll('.a3s');
     messageBodies.forEach(el => {
-        if (el.offsetParent !== null) { // Check visibility
+        if (el.offsetParent !== null) {
              emailBodyText += el.innerText + '\n';
         }
     });
 
     if (!emailBodyText.trim()) {
-        // Fallback if we can't find specific class, grab the main visible text
         const main = document.querySelector('[role="main"]');
         if (main) emailBodyText = main.innerText;
     }
+
+    const senderInfo = extractSenderInfo();
+    const links = extractLinks();
+
+    console.log("Extracted Metadata:", { senderInfo, linksCount: links.length });
 
     // Send to background
     try {
         const response = await chrome.runtime.sendMessage({
             action: 'analyze_email',
-            text: emailBodyText.substring(0, 2000) // Limit text to avoid token limits if massive
+            text: emailBodyText.substring(0, 2000),
+            sender: senderInfo,
+            links: links
         });
 
         if (response && response.isPhishing) {
@@ -119,22 +139,17 @@ async function scanCurrentEmail() {
 }
 
 // --- Observer ---
-// We use a MutationObserver to detect when the URL changes or the DOM settles.
-// Gmail is an SPA, so simple URL listeners might not catch everything, but hash changes trigger.
-
 let scanTimeout;
 const observer = new MutationObserver(() => {
-    // Debounce the scan
     clearTimeout(scanTimeout);
     scanTimeout = setTimeout(scanCurrentEmail, CHECK_DELAY_MS);
 });
 
 observer.observe(document.body, { childList: true, subtree: true });
 
-// Also listen for hash changes specifically
 window.addEventListener('hashchange', () => {
     clearTimeout(scanTimeout);
     scanTimeout = setTimeout(scanCurrentEmail, CHECK_DELAY_MS);
 });
 
-console.log('Gmail Phishing Protector: Content script loaded.');
+console.log('Gmail Phishing Protector: Content script loaded (Enhanced Extraction).');
