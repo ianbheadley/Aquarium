@@ -29,7 +29,7 @@
     .container {
       background-color: var(--card-bg);
       width: 100%;
-      max-width: 500px;
+      max-width: 550px;
       padding: 32px;
       border-radius: 12px;
       box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
@@ -59,6 +59,16 @@
       margin-bottom: 20px;
     }
 
+    .section-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--primary-color);
+      margin-top: 24px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #f1f5f9;
+      padding-bottom: 8px;
+    }
+
     label {
       display: block;
       font-size: 0.875rem;
@@ -82,6 +92,24 @@
       outline: none;
       border-color: var(--accent-color);
       box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .checkbox-group input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+    }
+
+    .checkbox-group label {
+      margin: 0;
+      font-weight: 400;
     }
 
     .hidden {
@@ -148,11 +176,12 @@
   <div class="container">
     <header>
       <h1>Configuration</h1>
-      <p class="description">Configure your AI provider for phishing analysis.</p>
+      <p class="description">Configure your AI provider and security settings.</p>
     </header>
 
+    <h2 class="section-title">AI Provider</h2>
     <div class="form-group">
-      <label for="provider">AI Provider</label>
+      <label for="provider">Select Provider</label>
       <select id="provider">
         <option value="gemini">Google Gemini API</option>
         <option value="ollama">Ollama (Local)</option>
@@ -174,8 +203,30 @@
       <div class="form-group">
         <label for="ollamaModel">Model Name</label>
         <input type="text" id="ollamaModel" placeholder="e.g., llava, llama3" value="llava" />
-        <small style="color: #64748b; font-size: 0.75rem; display: block; margin-top: 4px;">Note: A vision-capable model like <code>llava</code> is recommended for screenshot analysis.</small>
+        <small style="color: #64748b; font-size: 0.75rem; display: block; margin-top: 4px;">Note: A vision-capable model like <code>llava</code> is recommended.</small>
       </div>
+    </div>
+
+    <h2 class="section-title">Centralized Reporting</h2>
+    <div class="form-group">
+      <label for="webhookUrl">Phishing Report Webhook URL</label>
+      <input type="text" id="webhookUrl" placeholder="https://your-siem-or-webhook.com/report" />
+      <small style="color: #64748b; font-size: 0.75rem; display: block; margin-top: 4px;">If set, detected phishing events will be POSTed to this URL (e.g., for IT logging).</small>
+    </div>
+
+    <h2 class="section-title">Gmail Protection</h2>
+    <div class="form-group">
+      <div class="checkbox-group">
+        <input type="checkbox" id="enableGmail" />
+        <label for="enableGmail">Enable Phishing Scanning for Gmail</label>
+      </div>
+      <div class="checkbox-group">
+        <input type="checkbox" id="forceLocalGmail" checked />
+        <label for="forceLocalGmail">Force Local Model (Ollama) for Gmail (Privacy)</label>
+      </div>
+      <small style="color: #64748b; font-size: 0.75rem; display: block; margin-top: 4px; margin-left: 24px;">
+        When enabled, analyzes open emails for phishing attempts. Using "Force Local Model" ensures email content is not sent to external APIs.
+      </small>
     </div>
 
     <div class="actions">

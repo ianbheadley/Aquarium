@@ -2,6 +2,7 @@
 const CACHE_PREFIX = 'phishing_cache_';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
 const SCREENSHOT_DELAY_MS = 1500; // Delay in milliseconds (e.g., 1.5 seconds)
+const EMAIL_SCREENSHOT_DELAY_MS = 2500; // Longer delay for Gmail to render
 
 /**
  * Retrieves the AI Provider Configuration from chrome.storage.local.
@@ -9,16 +10,27 @@ const SCREENSHOT_DELAY_MS = 1500; // Delay in milliseconds (e.g., 1.5 seconds)
  */
 async function getAiProviderConfig() {
   try {
-    const result = await chrome.storage.local.get(['aiProvider', 'geminiApiKey', 'ollamaUrl', 'ollamaModel']);
+    const result = await chrome.storage.local.get([
+        'aiProvider',
+        'geminiApiKey',
+        'ollamaUrl',
+        'ollamaModel',
+        'reportingWebhookUrl',
+        'enableGmail',
+        'forceLocalGmail'
+    ]);
     return {
       provider: result.aiProvider || 'gemini',
       geminiApiKey: result.geminiApiKey || null,
       ollamaUrl: result.ollamaUrl || 'http://localhost:11434/api/generate',
-      ollamaModel: result.ollamaModel || 'llava'
+      ollamaModel: result.ollamaModel || 'llava',
+      reportingWebhookUrl: result.reportingWebhookUrl || null,
+      enableGmail: result.enableGmail || false,
+      forceLocalGmail: result.forceLocalGmail !== undefined ? result.forceLocalGmail : true
     };
   } catch (error) {
     console.error('Error retrieving configuration:', error);
-    return { provider: 'gemini', geminiApiKey: null };
+    return { provider: 'gemini', geminiApiKey: null, enableGmail: false };
   }
 }
 
@@ -84,14 +96,62 @@ function captureVisibleTabPromise(tabId, options) {
 }
 
 /**
+ * Report detection to a centralized webhook.
+ * @param {string} url The URL detected.
+ * @param {string} reason The detection reason.
+ * @param {string} detector The name of the detector (e.g. Gemini, Ollama).
+ * @param {string} webhookUrl The webhook endpoint.
+ */
+async function reportToWebhook(url, reason, detector, webhookUrl) {
+    if (!webhookUrl) return;
+
+    const payload = {
+        event: 'phishing_detection',
+        url: url,
+        reason: reason,
+        detector: detector,
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent
+    };
+
+    try {
+        console.log(`Reporting to webhook: ${webhookUrl}`);
+        await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    } catch (error) {
+        console.error('Failed to report to webhook:', error);
+    }
+}
+
+/**
  * Checks a given URL and its screenshot with the Ollama API.
  * @param {string} url The URL to check.
  * @param {string} base64ImageData Base64 encoded screenshot.
  * @param {object} config The Ollama configuration.
+ * @param {boolean} isEmail Whether this is an email analysis context.
  * @returns {Promise<{isPhishing: boolean, reason: string}>}
  */
-async function checkUrlWithOllama(url, base64ImageData, config) {
-    const prompt = `You are a phishing detection expert. Analyze the provided URL and webpage screenshot.
+async function checkUrlWithOllama(url, base64ImageData, config, isEmail = false) {
+    let prompt;
+
+    if (isEmail) {
+        prompt = `You are a security expert analyzing a screenshot of an email message.
+The user is viewing this email in a web client. Ignore the email client interface (menus, sidebars).
+Focus strictly on the EMAIL CONTENT (sender, subject, body, links/buttons).
+
+Does this email appear to be a PHISHING attempt?
+Look for:
+1. Urgency or threats (e.g., "Account suspended").
+2. Suspicious requests for credentials or payments.
+3. Mismatched logos or poor formatting.
+
+Is this email content highly likely to be a phishing scam?
+Respond strictly in the format: "YES/NO. Reason: [Explain your decision.]".`;
+    } else {
+        prompt = `You are a phishing detection expert. Analyze the provided URL and webpage screenshot.
 URL: ${url}
 Critically evaluate if this site is a phishing scam.
 Key Considerations:
@@ -101,6 +161,7 @@ Key Considerations:
 
 Is this site highly likely to be a phishing scam?
 Respond strictly in the format: "YES/NO. Reason: [Explain your decision.]".`;
+    }
 
     try {
         const response = await fetch(config.ollamaUrl, {
@@ -155,10 +216,27 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision.]".`;
  * @param {string} url The URL to check.
  * @param {string} base64ImageData Base64 encoded screenshot.
  * @param {string} apiKey The Gemini API Key.
+ * @param {boolean} isEmail Whether this is an email analysis context.
  * @returns {Promise<{isPhishing: boolean, reason: string}>}
  */
-async function checkUrlWithGemini(url, base64ImageData, apiKey) {
-    const prompt = `You are a phishing detection expert. Analyze the provided URL and webpage screenshot.
+async function checkUrlWithGemini(url, base64ImageData, apiKey, isEmail = false) {
+    let prompt;
+
+    if (isEmail) {
+        prompt = `You are a security expert analyzing a screenshot of an email message.
+The user is viewing this email in a web client. Ignore the email client interface (menus, sidebars).
+Focus strictly on the EMAIL CONTENT (sender, subject, body, links/buttons).
+
+Does this email appear to be a PHISHING attempt?
+Look for:
+1. Urgency or threats (e.g., "Account suspended").
+2. Suspicious requests for credentials or payments.
+3. Mismatched logos or poor formatting.
+
+Is this email content highly likely to be a phishing scam?
+Respond strictly in the format: "YES/NO. Reason: [Explain your decision based on the email content visible in the image.]".`;
+    } else {
+        prompt = `You are a phishing detection expert. Analyze the provided URL and webpage screenshot.
 URL: ${url}
 Critically evaluate if this site is a phishing scam.
 Key Considerations:
@@ -168,6 +246,7 @@ Key Considerations:
 
 Is this site highly likely to be a phishing scam?
 Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES, specify the most critical visual phishing indicators from the screenshot and any truly suspicious URL patterns (not just standard tokens on known services). If NO, mention key legitimate visual cues, URL characteristics that support legitimacy (e.g., correct domain, SSL, recognized token patterns on auth pages), and overall consistency.]".`;
+    }
 
   const apiUrlWithKey = `${GEMINI_API_URL}?key=${apiKey}`;
 
@@ -254,51 +333,70 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
  * @param {string} url The URL to check.
  * @param {string} hostname The hostname derived from the URL.
  * @param {number} tabId The ID of the tab to capture.
- * @returns {Promise<boolean>} True if AI suspects phishing, false otherwise.
+ * @returns {Promise<{isPhishing: boolean, reason: string}>}
  */
 async function checkUrlAndScreenshotAndCache(url, hostname, tabId) {
-  console.log(`Attempting multimodal check for: ${url} (Hostname: ${hostname}, TabID: ${tabId})`);
-
   const config = await getAiProviderConfig();
 
-  if (config.provider === 'gemini' && !config.geminiApiKey) {
+  const isGmail = hostname === 'mail.google.com';
+
+  console.log(`Attempting multimodal check for: ${url} (Hostname: ${hostname}, TabID: ${tabId}, IsGmail: ${isGmail})`);
+
+  // Determine Provider
+  let useOllama = (config.provider === 'ollama');
+  if (isGmail && config.forceLocalGmail) {
+      console.log("Gmail detected: Forcing use of Local Ollama provider for privacy.");
+      useOllama = true;
+  }
+
+  // Check keys/config validity
+  if (!useOllama && !config.geminiApiKey) {
       console.error('No Gemini API key set. Please configure it in the extension options.');
       await chrome.runtime.openOptionsPage();
-      return false;
+      return { isPhishing: false, reason: "No API Key" };
   }
 
   let screenshotDataUrl;
   try {
     // Wait for a brief period to allow page rendering
-    await new Promise(resolve => setTimeout(resolve, SCREENSHOT_DELAY_MS));
-    console.log(`Delay of ${SCREENSHOT_DELAY_MS}ms finished. Capturing screenshot for ${url}`);
+    const delay = isGmail ? EMAIL_SCREENSHOT_DELAY_MS : SCREENSHOT_DELAY_MS;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    console.log(`Delay of ${delay}ms finished. Capturing screenshot for ${url}`);
     screenshotDataUrl = await captureVisibleTabPromise(null, { format: 'png' });
     console.log(`Screenshot captured successfully for ${url}`);
   } catch (error) {
     console.error(`Failed to capture screenshot for ${url} after delay:`, error);
     await setCachedStatus(hostname, 'safe', `Analysis skipped: Screenshot failed - ${error.message}`);
-    return false;
+    return { isPhishing: false, reason: "Screenshot failed" };
   }
 
   const base64ImageData = screenshotDataUrl.split(',')[1];
   if (!base64ImageData) {
     console.error(`Failed to extract base64 data from screenshot for ${url}`);
     await setCachedStatus(hostname, 'safe', 'Analysis skipped: Failed to process screenshot data.');
-    return false;
+    return { isPhishing: false, reason: "No image data" };
   }
 
-  console.log(`Checking URL and Screenshot with Provider: ${config.provider}`);
+  const providerName = useOllama ? 'ollama' : 'gemini';
+  console.log(`Checking URL and Screenshot with Provider: ${providerName}`);
 
   let result;
-  if (config.provider === 'ollama') {
-      result = await checkUrlWithOllama(url, base64ImageData, config);
+  if (useOllama) {
+      result = await checkUrlWithOllama(url, base64ImageData, config, isGmail);
   } else {
-      result = await checkUrlWithGemini(url, base64ImageData, config.geminiApiKey);
+      result = await checkUrlWithGemini(url, base64ImageData, config.geminiApiKey, isGmail);
   }
 
-  const cacheStatus = result.isPhishing ? 'phishing' : 'safe';
-  await setCachedStatus(hostname, cacheStatus, result.reason);
-  return result.isPhishing;
+  if (result.isPhishing && config.reportingWebhookUrl) {
+      await reportToWebhook(url, result.reason, providerName, config.reportingWebhookUrl);
+  }
+
+  if (!isGmail) {
+      const cacheStatus = result.isPhishing ? 'phishing' : 'safe';
+      await setCachedStatus(hostname, cacheStatus, result.reason);
+  }
+
+  return result;
 }
 
 /**
@@ -542,17 +640,34 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       return;
     }
 
-    if (hostname.includes('generativelanguage.googleapis.com') ||
+    // Check config to see if we scan Gmail
+    const config = await getAiProviderConfig();
+    const isGmail = hostname === 'mail.google.com';
+
+    if (isGmail && !config.enableGmail) {
+         console.log(`Skipping Gmail (Scanning Disabled): ${tab.url}`);
+         return;
+    }
+
+    if (!isGmail && (
+        hostname.includes('generativelanguage.googleapis.com') ||
         hostname.endsWith('.google.com') ||
         hostname === 'localhost' ||
         hostname === '127.0.0.1' ||
         hostname.endsWith('github.com')
-    ) {
+    )) {
       console.log(`Skipping analysis for whitelisted/internal URL: ${tab.url}`);
       return;
     }
 
-    const { status: cachedStatus, reason: cachedReason } = await getCachedStatus(hostname);
+    let cachedStatus = null, cachedReason = null;
+
+    // Don't use cache for Gmail context
+    if (!isGmail) {
+        const cache = await getCachedStatus(hostname);
+        cachedStatus = cache.status;
+        cachedReason = cache.reason;
+    }
 
     let isPhishing = false;
     let reasonForAlert = "Suspicious indicators detected.";
@@ -566,11 +681,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       return;
     } else {
       console.log(`No conclusive cache entry for ${hostname}. Proceeding with AI check.`);
-      isPhishing = await checkUrlAndScreenshotAndCache(tab.url, hostname, tabId);
+      const analysisResult = await checkUrlAndScreenshotAndCache(tab.url, hostname, tabId);
+      isPhishing = analysisResult.isPhishing;
+
       if (isPhishing) {
-        const { reason: updatedReason } = await getCachedStatus(hostname);
-        reasonForAlert = updatedReason || "Suspicious indicators detected from AI analysis.";
-      } else {
+        reasonForAlert = analysisResult.reason || "Suspicious indicators detected from AI analysis.";
+      } else if (!isGmail) {
+        // Only check cache again for non-Gmail sites
         const { reason: safeReason } = await getCachedStatus(hostname);
         console.log(`Site ${hostname} determined safe or inconclusive by AI. Reason: ${safeReason || 'No specific reason provided.'}`);
       }

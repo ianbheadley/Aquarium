@@ -5,6 +5,9 @@ const ollamaConfig = document.getElementById('ollama-config');
 const apiKeyInput = document.getElementById('apiKey');
 const ollamaUrlInput = document.getElementById('ollamaUrl');
 const ollamaModelInput = document.getElementById('ollamaModel');
+const webhookUrlInput = document.getElementById('webhookUrl');
+const enableGmailInput = document.getElementById('enableGmail');
+const forceLocalGmailInput = document.getElementById('forceLocalGmail');
 const saveButton = document.getElementById('saveButton');
 const clearButton = document.getElementById('clearButton');
 const statusDiv = document.getElementById('status');
@@ -30,6 +33,9 @@ saveButton.addEventListener('click', async () => {
   const apiKey = apiKeyInput.value.trim();
   const ollamaUrl = ollamaUrlInput.value.trim() || DEFAULT_OLLAMA_URL;
   const ollamaModel = ollamaModelInput.value.trim() || DEFAULT_OLLAMA_MODEL;
+  const webhookUrl = webhookUrlInput.value.trim();
+  const enableGmail = enableGmailInput.checked;
+  const forceLocalGmail = forceLocalGmailInput.checked;
 
   // Validation
   if (provider === 'gemini' && !apiKey) {
@@ -48,11 +54,19 @@ saveButton.addEventListener('click', async () => {
      }
   }
 
+  if (webhookUrl && !webhookUrl.startsWith('http')) {
+      showStatus('Webhook URL must start with http:// or https://', 'error');
+      return;
+  }
+
   const settings = {
     aiProvider: provider,
     geminiApiKey: apiKey,
     ollamaUrl: ollamaUrl,
-    ollamaModel: ollamaModel
+    ollamaModel: ollamaModel,
+    reportingWebhookUrl: webhookUrl,
+    enableGmail: enableGmail,
+    forceLocalGmail: forceLocalGmail
   };
 
   try {
@@ -73,6 +87,9 @@ clearButton.addEventListener('click', async () => {
     apiKeyInput.value = '';
     ollamaUrlInput.value = DEFAULT_OLLAMA_URL;
     ollamaModelInput.value = DEFAULT_OLLAMA_MODEL;
+    webhookUrlInput.value = '';
+    enableGmailInput.checked = false;
+    forceLocalGmailInput.checked = true;
 
     geminiConfig.classList.remove('hidden');
     ollamaConfig.classList.add('hidden');
@@ -86,7 +103,15 @@ clearButton.addEventListener('click', async () => {
 // Load Settings on Start
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    const result = await chrome.storage.local.get(['aiProvider', 'geminiApiKey', 'ollamaUrl', 'ollamaModel']);
+    const result = await chrome.storage.local.get([
+        'aiProvider',
+        'geminiApiKey',
+        'ollamaUrl',
+        'ollamaModel',
+        'reportingWebhookUrl',
+        'enableGmail',
+        'forceLocalGmail'
+    ]);
 
     if (result.aiProvider) {
       providerSelect.value = result.aiProvider;
@@ -102,6 +127,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (result.ollamaModel) {
       ollamaModelInput.value = result.ollamaModel;
+    }
+
+    if (result.reportingWebhookUrl) {
+        webhookUrlInput.value = result.reportingWebhookUrl;
+    }
+
+    // Checkbox logic: default is false, so only set if true
+    if (result.enableGmail) {
+        enableGmailInput.checked = result.enableGmail;
+    }
+
+    // Default is true for forceLocal, but storage might say false
+    if (result.forceLocalGmail !== undefined) {
+        forceLocalGmailInput.checked = result.forceLocalGmail;
+    } else {
+        forceLocalGmailInput.checked = true; // Default on
     }
 
     // Trigger change event to set initial visibility
