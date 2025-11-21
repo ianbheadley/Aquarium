@@ -1,61 +1,126 @@
-document.getElementById('saveButton').addEventListener('click', async () => {
-  const apiKeyInput = document.getElementById('apiKey');
-  const apiKey = apiKeyInput.value.trim();
-  const statusDiv = document.getElementById('status');
+// DOM Elements
+const providerSelect = document.getElementById('provider');
+const geminiConfig = document.getElementById('gemini-config');
+const ollamaConfig = document.getElementById('ollama-config');
+const apiKeyInput = document.getElementById('apiKey');
+const ollamaUrlInput = document.getElementById('ollamaUrl');
+const ollamaModelInput = document.getElementById('ollamaModel');
+const saveButton = document.getElementById('saveButton');
+const clearButton = document.getElementById('clearButton');
+const statusDiv = document.getElementById('status');
 
-  if (!apiKey) {
-    statusDiv.textContent = 'Please enter a valid API key to save.';
-    statusDiv.className = 'error';
+// Default Settings
+const DEFAULT_OLLAMA_URL = 'http://localhost:11434/api/generate';
+const DEFAULT_OLLAMA_MODEL = 'llava';
+
+// Toggle config sections based on provider
+providerSelect.addEventListener('change', () => {
+  if (providerSelect.value === 'gemini') {
+    geminiConfig.classList.remove('hidden');
+    ollamaConfig.classList.add('hidden');
+  } else {
+    geminiConfig.classList.add('hidden');
+    ollamaConfig.classList.remove('hidden');
+  }
+});
+
+// Save Settings
+saveButton.addEventListener('click', async () => {
+  const provider = providerSelect.value;
+  const apiKey = apiKeyInput.value.trim();
+  const ollamaUrl = ollamaUrlInput.value.trim() || DEFAULT_OLLAMA_URL;
+  const ollamaModel = ollamaModelInput.value.trim() || DEFAULT_OLLAMA_MODEL;
+
+  // Validation
+  if (provider === 'gemini' && !apiKey) {
+    showStatus('Please enter a valid Gemini API key.', 'error');
     return;
   }
 
+  if (provider === 'ollama') {
+     if (!ollamaUrl) {
+        showStatus('Please enter a valid Ollama URL.', 'error');
+        return;
+     }
+     if (!ollamaModel) {
+        showStatus('Please enter a valid Model name.', 'error');
+        return;
+     }
+  }
+
+  const settings = {
+    aiProvider: provider,
+    geminiApiKey: apiKey,
+    ollamaUrl: ollamaUrl,
+    ollamaModel: ollamaModel
+  };
+
   try {
-    await chrome.storage.local.set({ geminiApiKey: apiKey });
-    statusDiv.textContent = 'API key saved successfully!';
-    statusDiv.className = 'success';
-    setTimeout(() => {
-      statusDiv.textContent = '';
-      statusDiv.className = '';
-    }, 3000);
+    await chrome.storage.local.set(settings);
+    showStatus('Settings saved successfully.', 'success');
   } catch (error) {
-    statusDiv.textContent = 'Error saving API key: ' + error.message;
-    statusDiv.className = 'error';
-    console.error('Error saving API key:', error);
+    showStatus('Error saving settings: ' + error.message, 'error');
+    console.error('Error saving settings:', error);
   }
 });
 
-document.getElementById('clearButton').addEventListener('click', async () => {
-  const apiKeyInput = document.getElementById('apiKey');
-  const statusDiv = document.getElementById('status');
-
+// Clear Settings
+clearButton.addEventListener('click', async () => {
   try {
-    await chrome.storage.local.remove('geminiApiKey');
-    apiKeyInput.value = ''; // Clear the input field
-    statusDiv.textContent = 'API key cleared successfully!';
-    statusDiv.className = 'success';
-    setTimeout(() => {
-      statusDiv.textContent = '';
-      statusDiv.className = '';
-    }, 3000);
+    await chrome.storage.local.clear();
+    // Reset UI to defaults
+    providerSelect.value = 'gemini';
+    apiKeyInput.value = '';
+    ollamaUrlInput.value = DEFAULT_OLLAMA_URL;
+    ollamaModelInput.value = DEFAULT_OLLAMA_MODEL;
+
+    geminiConfig.classList.remove('hidden');
+    ollamaConfig.classList.add('hidden');
+
+    showStatus('All settings cleared.', 'success');
   } catch (error) {
-    statusDiv.textContent = 'Error clearing API key: ' + error.message;
-    statusDiv.className = 'error';
-    console.error('Error clearing API key:', error);
+    showStatus('Error clearing settings: ' + error.message, 'error');
   }
 });
 
-
-// Load saved API key on page load
+// Load Settings on Start
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    const result = await chrome.storage.local.get('geminiApiKey');
-    if (result.geminiApiKey) {
-      document.getElementById('apiKey').value = result.geminiApiKey;
+    const result = await chrome.storage.local.get(['aiProvider', 'geminiApiKey', 'ollamaUrl', 'ollamaModel']);
+
+    if (result.aiProvider) {
+      providerSelect.value = result.aiProvider;
     }
+
+    if (result.geminiApiKey) {
+      apiKeyInput.value = result.geminiApiKey;
+    }
+
+    if (result.ollamaUrl) {
+      ollamaUrlInput.value = result.ollamaUrl;
+    }
+
+    if (result.ollamaModel) {
+      ollamaModelInput.value = result.ollamaModel;
+    }
+
+    // Trigger change event to set initial visibility
+    providerSelect.dispatchEvent(new Event('change'));
+
   } catch (error) {
-    console.error('Error loading API key:', error);
-    const statusDiv = document.getElementById('status');
-    statusDiv.textContent = 'Error loading saved API key.';
-    statusDiv.className = 'error';
+    console.error('Error loading settings:', error);
+    showStatus('Error loading settings.', 'error');
   }
 });
+
+function showStatus(message, type) {
+  statusDiv.textContent = message;
+  statusDiv.className = type;
+
+  if (type === 'success') {
+    setTimeout(() => {
+      statusDiv.textContent = '';
+      statusDiv.className = '';
+    }, 3000);
+  }
+}
