@@ -2,18 +2,35 @@
 const CACHE_PREFIX = 'phishing_cache_';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
 const SCREENSHOT_DELAY_MS = 1500; // Delay in milliseconds (e.g., 1.5 seconds)
+const EMAIL_SCREENSHOT_DELAY_MS = 2500; // Longer delay for Gmail to render
 
 /**
- * Retrieves the API key from chrome.storage.local.
- * @returns {Promise<string|null>} The API key or null if not set.
+ * Retrieves the AI Provider Configuration from chrome.storage.local.
+ * @returns {Promise<object>} The configuration object.
  */
-async function getApiKey() {
+async function getAiProviderConfig() {
   try {
-    const result = await chrome.storage.local.get('geminiApiKey');
-    return result.geminiApiKey || null;
+    const result = await chrome.storage.local.get([
+        'aiProvider',
+        'geminiApiKey',
+        'ollamaUrl',
+        'ollamaModel',
+        'reportingWebhookUrl',
+        'enableGmail',
+        'forceLocalGmail'
+    ]);
+    return {
+      provider: result.aiProvider || 'gemini',
+      geminiApiKey: result.geminiApiKey || null,
+      ollamaUrl: result.ollamaUrl || 'http://localhost:11434/api/generate',
+      ollamaModel: result.ollamaModel || 'llava',
+      reportingWebhookUrl: result.reportingWebhookUrl || null,
+      enableGmail: result.enableGmail || false,
+      forceLocalGmail: result.forceLocalGmail !== undefined ? result.forceLocalGmail : true
+    };
   } catch (error) {
-    console.error('Error retrieving API key:', error);
-    return null;
+    console.error('Error retrieving configuration:', error);
+    return { provider: 'gemini', geminiApiKey: null, enableGmail: false };
   }
 }
 
@@ -33,9 +50,9 @@ async function setCachedStatus(hostname, status, reason = "") {
   try {
     await chrome.storage.local.set({ [key]: cacheEntry });
     console.log(`Cached ${hostname} as ${status}. Reason: ${reason}`);
-  } catch (error) { // CORRECTED: Added curly braces
+  } catch (error) {
     console.error(`Error setting cache for ${hostname}:`, error);
-  } // CORRECTED: This brace now correctly closes the catch
+  }
 }
 
 /**
@@ -79,46 +96,147 @@ function captureVisibleTabPromise(tabId, options) {
 }
 
 /**
- * Checks a given URL and its screenshot with the Gemini API (ONLY IF NOT CACHED AS SAFE).
- * Caches the result based on hostname.
- * @param {string} url The URL to check.
- * @param {string} hostname The hostname derived from the URL.
- * @param {number} tabId The ID of the tab to capture.
- * @returns {Promise<boolean>} True if Gemini suspects phishing, false otherwise.
+ * Report detection to a centralized webhook.
+ * @param {string} url The URL detected.
+ * @param {string} reason The detection reason.
+ * @param {string} detector The name of the detector (e.g. Gemini, Ollama).
+ * @param {string} webhookUrl The webhook endpoint.
  */
-async function checkUrlAndScreenshotAndCache(url, hostname, tabId) {
-  console.log(`Attempting multimodal check for: ${url} (Hostname: ${hostname}, TabID: ${tabId})`);
+async function reportToWebhook(url, reason, detector, webhookUrl) {
+    if (!webhookUrl) return;
 
-  const apiKey = await getApiKey();
-  if (!apiKey) {
-    console.error('No API key set. Please configure it in the extension options.');
-    await chrome.runtime.openOptionsPage();
-    return false;
-  }
+    const payload = {
+        event: 'phishing_detection',
+        url: url,
+        reason: reason,
+        detector: detector,
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent
+    };
 
-  const apiUrlWithKey = `${GEMINI_API_URL}?key=${apiKey}`;
+    try {
+        console.log(`Reporting to webhook: ${webhookUrl}`);
+        await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    } catch (error) {
+        console.error('Failed to report to webhook:', error);
+    }
+}
 
-  let screenshotDataUrl;
-  try {
-    // Wait for a brief period to allow page rendering
-    await new Promise(resolve => setTimeout(resolve, SCREENSHOT_DELAY_MS));
-    console.log(`Delay of ${SCREENSHOT_DELAY_MS}ms finished. Capturing screenshot for ${url}`);
-    screenshotDataUrl = await captureVisibleTabPromise(null, { format: 'png' });
-    console.log(`Screenshot captured successfully for ${url}`);
-  } catch (error) {
-    console.error(`Failed to capture screenshot for ${url} after delay:`, error);
-    await setCachedStatus(hostname, 'safe', `Analysis skipped: Screenshot failed - ${error.message}`);
-    return false;
-  }
+/**
+ * Checks a given URL and its screenshot with the Ollama API.
+ * @param {string} url The URL to check.
+ * @param {string} base64ImageData Base64 encoded screenshot.
+ * @param {object} config The Ollama configuration.
+ * @param {boolean} isEmail Whether this is an email analysis context.
+ * @returns {Promise<{isPhishing: boolean, reason: string}>}
+ */
+async function checkUrlWithOllama(url, base64ImageData, config, isEmail = false) {
+    let prompt;
 
-  const base64ImageData = screenshotDataUrl.split(',')[1];
-  if (!base64ImageData) {
-    console.error(`Failed to extract base64 data from screenshot for ${url}`);
-    await setCachedStatus(hostname, 'safe', 'Analysis skipped: Failed to process screenshot data.');
-    return false;
-  }
+    if (isEmail) {
+        prompt = `You are a security expert analyzing a screenshot of an email message.
+The user is viewing this email in a web client. Ignore the email client interface (menus, sidebars).
+Focus strictly on the EMAIL CONTENT (sender, subject, body, links/buttons).
 
-  const prompt = `You are a phishing detection expert. Analyze the provided URL and webpage screenshot.
+Does this email appear to be a PHISHING attempt?
+Look for:
+1. Urgency or threats (e.g., "Account suspended").
+2. Suspicious requests for credentials or payments.
+3. Mismatched logos or poor formatting.
+
+Is this email content highly likely to be a phishing scam?
+Respond strictly in the format: "YES/NO. Reason: [Explain your decision.]".`;
+    } else {
+        prompt = `You are a phishing detection expert. Analyze the provided URL and webpage screenshot.
+URL: ${url}
+Critically evaluate if this site is a phishing scam.
+Key Considerations:
+1.  Visuals: Analyze branding (logos, colors, layout), form elements, and any suspicious visual cues in the screenshot.
+2.  URL Structure: Examine the domain, subdomains, paths, and query parameters.
+3.  Discrepancies: Look for mismatches between the URL's implied service and the visual content.
+
+Is this site highly likely to be a phishing scam?
+Respond strictly in the format: "YES/NO. Reason: [Explain your decision.]".`;
+    }
+
+    try {
+        const response = await fetch(config.ollamaUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: config.ollamaModel,
+                prompt: prompt,
+                images: [base64ImageData],
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            console.error(`Ollama API Error ${response.status}`);
+            return { isPhishing: false, reason: `Ollama API Error: ${response.status}` };
+        }
+
+        const data = await response.json();
+        const resultText = data.response.trim();
+        console.log(`Ollama Raw Result: ${resultText}`);
+
+        let isPhishing = false;
+        let reason = "Analysis inconclusive.";
+
+        const match = resultText.match(/^(YES|NO)\.?\s*Reason:\s*(.*)/is);
+        if (match) {
+            isPhishing = (match[1].toUpperCase() === 'YES');
+            reason = match[2].trim();
+        } else {
+            // Fallback parsing
+             if (resultText.toUpperCase().startsWith('YES')) {
+                isPhishing = true;
+                reason = resultText.substring(3).trim();
+            } else if (resultText.toUpperCase().startsWith('NO')) {
+                isPhishing = false;
+                 reason = resultText.substring(2).trim();
+            }
+        }
+
+        return { isPhishing, reason };
+
+    } catch (error) {
+        console.error("Error calling Ollama:", error);
+        return { isPhishing: false, reason: "Error communicating with Ollama." };
+    }
+}
+
+
+/**
+ * Checks a given URL and its screenshot with the Gemini API.
+ * @param {string} url The URL to check.
+ * @param {string} base64ImageData Base64 encoded screenshot.
+ * @param {string} apiKey The Gemini API Key.
+ * @param {boolean} isEmail Whether this is an email analysis context.
+ * @returns {Promise<{isPhishing: boolean, reason: string}>}
+ */
+async function checkUrlWithGemini(url, base64ImageData, apiKey, isEmail = false) {
+    let prompt;
+
+    if (isEmail) {
+        prompt = `You are a security expert analyzing a screenshot of an email message.
+The user is viewing this email in a web client. Ignore the email client interface (menus, sidebars).
+Focus strictly on the EMAIL CONTENT (sender, subject, body, links/buttons).
+
+Does this email appear to be a PHISHING attempt?
+Look for:
+1. Urgency or threats (e.g., "Account suspended").
+2. Suspicious requests for credentials or payments.
+3. Mismatched logos or poor formatting.
+
+Is this email content highly likely to be a phishing scam?
+Respond strictly in the format: "YES/NO. Reason: [Explain your decision based on the email content visible in the image.]".`;
+    } else {
+        prompt = `You are a phishing detection expert. Analyze the provided URL and webpage screenshot.
 URL: ${url}
 Critically evaluate if this site is a phishing scam.
 Key Considerations:
@@ -128,8 +246,9 @@ Key Considerations:
 
 Is this site highly likely to be a phishing scam?
 Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES, specify the most critical visual phishing indicators from the screenshot and any truly suspicious URL patterns (not just standard tokens on known services). If NO, mention key legitimate visual cues, URL characteristics that support legitimacy (e.g., correct domain, SSL, recognized token patterns on auth pages), and overall consistency.]".`;
+    }
 
-  console.log(`Checking URL and Screenshot with Gemini: ${url}`);
+  const apiUrlWithKey = `${GEMINI_API_URL}?key=${apiKey}`;
 
   try {
     const response = await fetch(apiUrlWithKey, {
@@ -161,7 +280,7 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
       let errorBody = await response.text();
       try { errorBody = JSON.parse(errorBody); } catch(e) { /* Ignore */ }
       console.error(`Gemini API Error ${response.status}:`, errorBody);
-      return false;
+      return { isPhishing: false, reason: `Gemini API Error: ${response.status}` };
     }
 
     const data = await response.json();
@@ -199,226 +318,302 @@ Respond strictly in the format: "YES/NO. Reason: [Explain your decision. If YES,
       isPhishing = false;
     }
 
-    const cacheStatus = isPhishing ? 'phishing' : 'safe';
-    await setCachedStatus(hostname, cacheStatus, reason);
-    return isPhishing;
+    return { isPhishing, reason };
 
   } catch (error) {
     console.error(`Network or other error calling Gemini API (multimodal) for ${url}:`, error);
-    return false;
+    return { isPhishing: false, reason: "Network or other error." };
   }
 }
 
+
 /**
- * THIS FUNCTION IS INJECTED INTO THE WEBPAGE (Version 2.7 - UI & Reason Refinements)
- * Creates and displays the sleek, modern alert overlay with improved readability and new logo.
+ * Checks a given URL and its screenshot with the configured AI Provider (ONLY IF NOT CACHED AS SAFE).
+ * Caches the result based on hostname.
+ * @param {string} url The URL to check.
+ * @param {string} hostname The hostname derived from the URL.
+ * @param {number} tabId The ID of the tab to capture.
+ * @returns {Promise<{isPhishing: boolean, reason: string}>}
+ */
+async function checkUrlAndScreenshotAndCache(url, hostname, tabId) {
+  const config = await getAiProviderConfig();
+
+  const isGmail = hostname === 'mail.google.com';
+
+  console.log(`Attempting multimodal check for: ${url} (Hostname: ${hostname}, TabID: ${tabId}, IsGmail: ${isGmail})`);
+
+  // Determine Provider
+  let useOllama = (config.provider === 'ollama');
+  if (isGmail && config.forceLocalGmail) {
+      console.log("Gmail detected: Forcing use of Local Ollama provider for privacy.");
+      useOllama = true;
+  }
+
+  // Check keys/config validity
+  if (!useOllama && !config.geminiApiKey) {
+      console.error('No Gemini API key set. Please configure it in the extension options.');
+      await chrome.runtime.openOptionsPage();
+      return { isPhishing: false, reason: "No API Key" };
+  }
+
+  let screenshotDataUrl;
+  try {
+    // Wait for a brief period to allow page rendering
+    const delay = isGmail ? EMAIL_SCREENSHOT_DELAY_MS : SCREENSHOT_DELAY_MS;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    console.log(`Delay of ${delay}ms finished. Capturing screenshot for ${url}`);
+    screenshotDataUrl = await captureVisibleTabPromise(null, { format: 'png' });
+    console.log(`Screenshot captured successfully for ${url}`);
+  } catch (error) {
+    console.error(`Failed to capture screenshot for ${url} after delay:`, error);
+    await setCachedStatus(hostname, 'safe', `Analysis skipped: Screenshot failed - ${error.message}`);
+    return { isPhishing: false, reason: "Screenshot failed" };
+  }
+
+  const base64ImageData = screenshotDataUrl.split(',')[1];
+  if (!base64ImageData) {
+    console.error(`Failed to extract base64 data from screenshot for ${url}`);
+    await setCachedStatus(hostname, 'safe', 'Analysis skipped: Failed to process screenshot data.');
+    return { isPhishing: false, reason: "No image data" };
+  }
+
+  const providerName = useOllama ? 'ollama' : 'gemini';
+  console.log(`Checking URL and Screenshot with Provider: ${providerName}`);
+
+  let result;
+  if (useOllama) {
+      result = await checkUrlWithOllama(url, base64ImageData, config, isGmail);
+  } else {
+      result = await checkUrlWithGemini(url, base64ImageData, config.geminiApiKey, isGmail);
+  }
+
+  if (result.isPhishing && config.reportingWebhookUrl) {
+      await reportToWebhook(url, result.reason, providerName, config.reportingWebhookUrl);
+  }
+
+  if (!isGmail) {
+      const cacheStatus = result.isPhishing ? 'phishing' : 'safe';
+      await setCachedStatus(hostname, cacheStatus, result.reason);
+  }
+
+  return result;
+}
+
+/**
+ * THIS FUNCTION IS INJECTED INTO THE WEBPAGE (Updated for Enterprise/Professional Look)
+ * Creates and displays the professional alert overlay.
  * @param {string} alertUrl The URL identified as potentially phishing.
  * @param {string} reason The reason why the site was flagged.
  */
 function showPhishingAlertOnPage(alertUrl, reason = "Suspicious indicators detected.") {
-  const existingOverlayId = 'aquarium-sleek-alert-overlay-v27';
-  const existingStyleId = 'aquarium-sleek-styles-v27';
+  const existingOverlayId = 'aquarium-alert-overlay-v3';
+  const existingStyleId = 'aquarium-alert-styles-v3';
   if (document.getElementById(existingOverlayId)) {
     return;
   }
-  console.log('Injecting Aquarium Sleek phishing alert overlay (v2.7)...');
+  console.log('Injecting Aquarium Enterprise phishing alert overlay...');
 
   const cssStyles = `
-    @import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     #${existingOverlayId} {
       position: fixed;
       inset: 0;
-      background: linear-gradient(135deg, rgba(6, 182, 212, 0.65), rgba(30, 58, 138, 0.75));
-      background-image: linear-gradient(135deg, rgba(6, 182, 212, 0.65), rgba(30, 58, 138, 0.75)), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cg fill='%23ffffff' fill-opacity='0.04'%3E%3Cpath fill-rule='evenodd' d='M0 0h40v40H0V0zm40 40h40v40H40V40z'/%3E%3C/g%3E%3C/svg%3E");
+      background-color: rgba(15, 23, 42, 0.9);
       z-index: 2147483647;
       display: flex;
       justify-content: center;
       align-items: center;
-      font-family: 'Lato', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       padding: 20px;
       opacity: 1;
-      backdrop-filter: blur(3px);
-      -webkit-backdrop-filter: blur(3px);
-      animation: aquarium-overlay-fadein 0.5s ease-out;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      animation: aquarium-fadein 0.3s ease-out;
     }
-    .aquarium-alert-box {
-      position: relative;
-      width: 90%;
-      max-width: 550px;
-      border-radius: 16px;
-      padding: 3px;
-      transition: transform 0.3s ease-out;
-      background: linear-gradient(115deg, #22d3ee, #a855f7);
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1);
-    }
-    .aquarium-alert-box:hover {
-      transform: scale(1.02);
-    }
-    .aquarium-alert-content {
-      background-color: rgba(255, 255, 255, 0.9);
-      backdrop-filter: blur(10px) saturate(120%);
-      -webkit-backdrop-filter: blur(10px) saturate(120%);
-      border-radius: 14px;
-      padding: 32px 32px 32px 32px;
-      text-align: center;
-      position: relative;
+    .aquarium-modal {
+      background-color: #ffffff;
+      width: 100%;
+      max-width: 600px;
+      border-radius: 12px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
-    .aquarium-logo {
-      width: 48px;
-      height: 48px;
-      margin: 0 auto 16px auto;
-      display: block;
+    .aquarium-header {
+      background-color: #fee2e2;
+      padding: 24px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid #fecaca;
+    }
+    .aquarium-icon {
+      width: 32px;
+      height: 32px;
+      color: #dc2626;
+      flex-shrink: 0;
     }
     .aquarium-title {
-      font-size: 1.5rem;
+      color: #991b1b;
+      font-size: 1.25rem;
       font-weight: 700;
-      color: #1E3A8A;
-      margin-top: 0;
-      margin-bottom: 16px;
-      line-height: 1.3;
-      text-align: center;
+      margin: 0;
     }
-    .aquarium-message, .aquarium-reason {
-      font-size: 0.95rem;
+    .aquarium-content {
+      padding: 32px;
       color: #334155;
+    }
+    .aquarium-message {
+      font-size: 1rem;
       line-height: 1.6;
-      margin-bottom: 8px;
-      text-align: center;
+      margin: 0 0 20px 0;
+    }
+    .aquarium-url-box {
+      background-color: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.9rem;
+      color: #475569;
+      word-break: break-all;
+      margin-bottom: 24px;
+    }
+    .aquarium-reason-label {
+        font-weight: 600;
+        font-size: 0.875rem;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 8px;
     }
     .aquarium-reason {
-      color: #475569;
-      margin-bottom: 24px;
-      white-space: pre-line;
+      font-size: 0.95rem;
+      color: #1e293b;
+      background-color: #fff1f2;
+      border-left: 4px solid #e11d48;
+      padding: 16px;
+      border-radius: 0 6px 6px 0;
+      margin-bottom: 32px;
+      line-height: 1.5;
     }
-    .aquarium-url {
-      font-weight: 700;
-      background: linear-gradient(90deg, #06b6d4, #a855f7);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      color: #06b6d4;
-      display: block;
-      margin: 8px auto 8px auto;
-      word-break: break-all;
-      text-align: center;
-    }
-    .aquarium-button-container {
+    .aquarium-actions {
       display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 12px;
-      margin-top: 28px;
+      gap: 16px;
+      justify-content: flex-end;
+      padding-top: 24px;
+      border-top: 1px solid #e2e8f0;
     }
-    .aquarium-button {
-      flex-grow: 0;
-      flex-basis: calc(50% - 6px);
-      min-width: 150px;
-      padding: 12px 16px;
-      font-size: 0.9rem;
-      font-weight: 700;
-      color: white;
-      border: none;
-      border-radius: 8px;
+    .aquarium-btn {
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.95rem;
       cursor: pointer;
-      text-align: center;
-      transition: all 0.3s ease;
-      background-size: 200% auto;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      transition: all 0.2s;
+      border: none;
     }
-    .aquarium-button-understand {
-      background-image: linear-gradient(to right, #FF7E5F 0%, #D81B60 51%, #FF7E5F 100%);
+    .aquarium-btn-primary {
+      background-color: #dc2626;
+      color: white;
     }
-    .aquarium-button-leave {
-      background-image: linear-gradient(to right, #4FC3F7 0%, #5E35B1 51%, #4FC3F7 100%);
+    .aquarium-btn-primary:hover {
+      background-color: #b91c1c;
     }
-    .aquarium-button:hover {
-      background-position: right center;
-      transform: translateY(-2px);
-      box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
+    .aquarium-btn-secondary {
+      background-color: white;
+      color: #64748b;
+      border: 1px solid #cbd5e1;
     }
-    @keyframes aquarium-overlay-fadein {
-      from { opacity: 0; }
-      to { opacity: 1; }
+    .aquarium-btn-secondary:hover {
+      background-color: #f8fafc;
+      color: #334155;
+      border-color: #94a3b8;
+    }
+    @keyframes aquarium-fadein {
+      from { opacity: 0; transform: scale(0.98); }
+      to { opacity: 1; transform: scale(1); }
     }
   `;
 
   const overlay = document.createElement('div');
   overlay.id = existingOverlayId;
 
-  const alertBox = document.createElement('div');
-  alertBox.className = 'aquarium-alert-box';
+  const modal = document.createElement('div');
+  modal.className = 'aquarium-modal';
 
-  const alertContent = document.createElement('div');
-  alertContent.className = 'aquarium-alert-content';
+  // Header
+  const header = document.createElement('div');
+  header.className = 'aquarium-header';
 
-  const logo = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  logo.setAttribute('viewBox', '0 0 50 40');
-  logo.setAttribute('class', 'aquarium-logo');
-  logo.innerHTML = `
-    <defs>
-      <linearGradient id="boxyFishGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" style="stop-color:#22d3ee;stop-opacity:1" />
-        <stop offset="100%" style="stop-color:#a855f7;stop-opacity:1" />
-      </linearGradient>
-    </defs>
-    <rect x="5" y="10" width="30" height="20" rx="3" ry="3" fill="url(#boxyFishGradient)" />
-    <polygon points="35,12 45,5 45,35 35,28" fill="url(#boxyFishGradient)" />
-    <circle cx="15" cy="20" r="3" fill="white" />
-    <circle cx="15" cy="20" r="1.5" fill="#334155" />
-  `;
+  const warningIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  warningIcon.setAttribute('class', 'aquarium-icon');
+  warningIcon.setAttribute('fill', 'none');
+  warningIcon.setAttribute('viewBox', '0 0 24 24');
+  warningIcon.setAttribute('stroke', 'currentColor');
+  warningIcon.setAttribute('stroke-width', '2');
+  warningIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />`;
 
   const title = document.createElement('h2');
   title.className = 'aquarium-title';
-  title.textContent = 'Aquarium Alert: Heads Up!';
+  title.textContent = 'Security Alert: Potential Phishing Detected';
+
+  header.appendChild(warningIcon);
+  header.appendChild(title);
+  modal.appendChild(header);
+
+  // Content
+  const content = document.createElement('div');
+  content.className = 'aquarium-content';
 
   const message = document.createElement('p');
   message.className = 'aquarium-message';
-  const urlSpan = document.createElement('span');
-  urlSpan.className = 'aquarium-url';
-  urlSpan.textContent = alertUrl;
-  message.textContent = `Our AI analysis suggests the site at `;
-  message.appendChild(urlSpan);
-  message.appendChild(document.createTextNode(` shows signs commonly associated with phishing.`));
+  message.textContent = 'Aquarium has analyzed this page and identified it as a potential security threat. Accessing this site may compromise your personal information.';
 
-  const reasonPara = document.createElement('p');
-  reasonPara.className = 'aquarium-reason';
-  reasonPara.textContent = `Reason: ${reason}`;
+  const urlBox = document.createElement('div');
+  urlBox.className = 'aquarium-url-box';
+  urlBox.textContent = alertUrl;
 
-  const buttonContainer = document.createElement('div');
-  buttonContainer.className = 'aquarium-button-container';
+  const reasonLabel = document.createElement('div');
+  reasonLabel.className = 'aquarium-reason-label';
+  reasonLabel.textContent = 'Analysis Report';
+
+  const reasonBox = document.createElement('div');
+  reasonBox.className = 'aquarium-reason';
+  reasonBox.textContent = reason;
+
+  const actions = document.createElement('div');
+  actions.className = 'aquarium-actions';
+
+  const proceedButton = document.createElement('button');
+  proceedButton.className = 'aquarium-btn aquarium-btn-secondary';
+  proceedButton.textContent = 'Ignore Risk & Proceed';
+  proceedButton.onclick = () => {
+      const overlayToRemove = document.getElementById(existingOverlayId);
+      if (overlayToRemove) overlayToRemove.remove();
+      const styleElement = document.getElementById(existingStyleId);
+      if (styleElement) styleElement.remove();
+  };
 
   const leaveButton = document.createElement('button');
-  leaveButton.className = 'aquarium-button aquarium-button-leave';
-  leaveButton.textContent = 'Leave This Site';
+  leaveButton.className = 'aquarium-btn aquarium-btn-primary';
+  leaveButton.textContent = 'Get Me Out of Here';
   leaveButton.onclick = () => {
-    window.top.location.href = 'https://www.google.com';
-    const overlayToRemove = document.getElementById(existingOverlayId);
-    if (overlayToRemove) overlayToRemove.remove();
-    const styleElement = document.getElementById(existingStyleId);
-    if (styleElement) styleElement.remove();
+     window.top.location.href = 'https://google.com';
   };
 
-  const understandButton = document.createElement('button');
-  understandButton.className = 'aquarium-button aquarium-button-understand';
-  understandButton.textContent = 'I Understand, Continue';
-  understandButton.onclick = () => { // This arrow function might be missing a parameter name if one was intended
-    const overlayToRemove = document.getElementById(existingOverlayId);
-    if (overlayToRemove) overlayToRemove.remove();
-    const styleElement = document.getElementById(existingStyleId);
-    if (styleElement) styleElement.remove();
-  };
+  actions.appendChild(proceedButton);
+  actions.appendChild(leaveButton);
 
-  alertContent.appendChild(logo);
-  alertContent.appendChild(title);
-  alertContent.appendChild(message);
-  alertContent.appendChild(reasonPara);
-  buttonContainer.appendChild(leaveButton);
-  buttonContainer.appendChild(understandButton);
-  alertContent.appendChild(buttonContainer);
+  content.appendChild(message);
+  content.appendChild(urlBox);
+  content.appendChild(reasonLabel);
+  content.appendChild(reasonBox);
+  content.appendChild(actions);
 
-  alertBox.appendChild(alertContent);
-  overlay.appendChild(alertBox);
+  modal.appendChild(content);
+  overlay.appendChild(modal);
 
   const style = document.createElement('style');
   style.id = existingStyleId;
@@ -445,17 +640,34 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       return;
     }
 
-    if (hostname.includes('generativelanguage.googleapis.com') ||
+    // Check config to see if we scan Gmail
+    const config = await getAiProviderConfig();
+    const isGmail = hostname === 'mail.google.com';
+
+    if (isGmail && !config.enableGmail) {
+         console.log(`Skipping Gmail (Scanning Disabled): ${tab.url}`);
+         return;
+    }
+
+    if (!isGmail && (
+        hostname.includes('generativelanguage.googleapis.com') ||
         hostname.endsWith('.google.com') ||
         hostname === 'localhost' ||
         hostname === '127.0.0.1' ||
         hostname.endsWith('github.com')
-    ) {
+    )) {
       console.log(`Skipping analysis for whitelisted/internal URL: ${tab.url}`);
       return;
     }
 
-    const { status: cachedStatus, reason: cachedReason } = await getCachedStatus(hostname);
+    let cachedStatus = null, cachedReason = null;
+
+    // Don't use cache for Gmail context
+    if (!isGmail) {
+        const cache = await getCachedStatus(hostname);
+        cachedStatus = cache.status;
+        cachedReason = cache.reason;
+    }
 
     let isPhishing = false;
     let reasonForAlert = "Suspicious indicators detected.";
@@ -469,11 +681,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       return;
     } else {
       console.log(`No conclusive cache entry for ${hostname}. Proceeding with AI check.`);
-      isPhishing = await checkUrlAndScreenshotAndCache(tab.url, hostname, tabId);
+      const analysisResult = await checkUrlAndScreenshotAndCache(tab.url, hostname, tabId);
+      isPhishing = analysisResult.isPhishing;
+
       if (isPhishing) {
-        const { reason: updatedReason } = await getCachedStatus(hostname);
-        reasonForAlert = updatedReason || "Suspicious indicators detected from AI analysis.";
-      } else {
+        reasonForAlert = analysisResult.reason || "Suspicious indicators detected from AI analysis.";
+      } else if (!isGmail) {
+        // Only check cache again for non-Gmail sites
         const { reason: safeReason } = await getCachedStatus(hostname);
         console.log(`Site ${hostname} determined safe or inconclusive by AI. Reason: ${safeReason || 'No specific reason provided.'}`);
       }
@@ -496,11 +710,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 // --- Check API Key on Startup ---
 chrome.runtime.onInstalled.addListener(async () => {
-  const apiKey = await getApiKey();
-  if (!apiKey) {
+  const config = await getAiProviderConfig();
+  if (config.provider === 'gemini' && !config.geminiApiKey) {
     console.log('No API key found. Opening options page for setup.');
     chrome.runtime.openOptionsPage();
   }
 });
 
-console.log("Gemini Phishing Checker (URL + Screenshot) background script loaded (v0.3.4 - FP Handling, Syntax Fix 2).");
+console.log("Gemini/Ollama Phishing Checker (URL + Screenshot) background script loaded.");
