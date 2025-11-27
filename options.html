@@ -62,8 +62,12 @@
       border-color: var(--accent-color);
       box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
     }
+    .btn-group {
+      display: flex;
+      gap: 10px;
+    }
     button {
-      width: 100%;
+      flex: 1;
       background-color: var(--primary-color);
       color: white;
       border: none;
@@ -77,11 +81,19 @@
     button:hover {
       background-color: #1e293b;
     }
+    button#testConnection {
+      background-color: white;
+      color: var(--primary-color);
+      border: 1px solid var(--border-color);
+    }
+    button#testConnection:hover {
+      background-color: #f1f5f9;
+    }
     .status {
       margin-top: 1rem;
       font-size: 0.875rem;
       text-align: center;
-      height: 1.25rem;
+      min-height: 1.25rem;
     }
     .status.success {
       color: #10b981;
@@ -109,7 +121,10 @@
       <input type="text" id="ollamaModel" placeholder="llava">
       <div class="hint">Must support vision (e.g., llava, llama3.2-vision).</div>
     </div>
-    <button id="save">Save Configuration</button>
+    <div class="btn-group">
+      <button id="testConnection">Test Connection</button>
+      <button id="save">Save Configuration</button>
+    </div>
     <div id="status" class="status"></div>
   </div>
   <script src="options.js"></script>

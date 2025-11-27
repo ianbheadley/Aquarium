@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Context Invalidation Mock</title>
+</head>
+<body>
+    <h1>Gmail Mock</h1>
+    <script>
+        // Mock chrome object but with invalid runtime to simulate the error condition
+        window.chrome = {
+            runtime: undefined // Simulates context being completely gone or undefined
+        };
+
+        // Function from content.js (copied here for testing)
+        function isExtensionContextValid() {
+          return typeof chrome !== 'undefined' && chrome.runtime && !!chrome.runtime.id;
+        }
+
+        function showReloadRequiredBanner() {
+            if (document.getElementById('gpp-reload-banner')) return;
+            const banner = document.createElement('div');
+            banner.id = 'gpp-reload-banner';
+            banner.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; background-color: #f59e0b; color: #fff; text-align: center; padding: 8px; z-index: 10000; font-family: sans-serif; font-weight: bold;';
+            banner.innerText = "Gmail Phishing Protector updated. Please refresh this page to continue.";
+            document.body.prepend(banner);
+        }
+
+        async function sendMessageToBackground(payload) {
+            if (!isExtensionContextValid()) {
+                console.warn("GPP: Extension context invalid. User must reload.");
+                showReloadRequiredBanner();
+                return null;
+            }
+            return "Should not get here";
+        }
+
+        // Trigger the test
+        setTimeout(() => {
+            sendMessageToBackground({ action: 'test' });
+        }, 500);
+    </script>
+</body>
+</html>
