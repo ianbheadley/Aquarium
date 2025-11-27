@@ -1,22 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "Gemini Phishing Site Checker (Demo)",
-  "version": "0.3.2",
-  "description": "Uses Gemini API (URL + Screenshot) to check if a visited site might be phishing, with caching. (Proof of Concept - Read Warnings!)",
+  "name": "Gmail Phishing Protector",
+  "version": "1.0.0",
+  "description": "Enterprise-grade phishing detection for Gmail using local AI models.",
   "permissions": [
     "tabs",
     "activeTab",
-    "notifications",
     "scripting",
     "storage"
   ],
   "host_permissions": [
-    "*://generativelanguage.googleapis.com/*",
-    "<all_urls>"
+    "*://mail.google.com/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["*://mail.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "icons": {
     "48": "images/icon48.png",
     "128": "images/icon128.png"
