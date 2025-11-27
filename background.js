@@ -26,6 +26,12 @@ function captureVisibleTabPromise() {
     });
 }
 
+// --- Badge Management ---
+function setBadge(text, color = '#3b82f6') {
+    chrome.action.setBadgeText({ text: text });
+    chrome.action.setBadgeBackgroundColor({ color: color });
+}
+
 // --- Analysis ---
 async function analyzeWithOllama(text, screenshotDataUrl, sender, links) {
     const config = await getOllamaConfig();
@@ -101,6 +107,7 @@ Respond STRICTLY in JSON:
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'analyze_email') {
         console.log("Received analysis request for tab:", sender.tab.id);
+        setBadge("...", "#fbbf24"); // Yellow for processing
 
         (async () => {
             try {
@@ -115,11 +122,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     message.links
                 );
 
-                // 3. Return Result
+                // 3. Update Badge
+                if (analysis.isPhishing) {
+                    setBadge("WARN", "#ef4444"); // Red
+                } else {
+                    setBadge("SAFE", "#10b981"); // Green
+                }
+
+                // 4. Return Result
                 sendResponse(analysis);
 
             } catch (error) {
                 console.error("Error in analysis pipeline:", error);
+                setBadge("ERR", "#64748b"); // Gray
                 sendResponse({ isPhishing: false, reason: "Internal error" });
             }
         })();
@@ -128,4 +143,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
+// Initialize Badge
+setBadge("ON", "#3b82f6"); // Blue
 console.log("Gmail Phishing Protector: Background service worker loaded.");

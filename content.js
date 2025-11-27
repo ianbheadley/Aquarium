@@ -2,6 +2,61 @@
 // --- Configuration ---
 const CHECK_DELAY_MS = 2000; // Wait for email to render
 
+// --- Helpers ---
+
+// Handle Extension Context Invalidation (Updates/Reloads)
+function isExtensionContextValid() {
+  return typeof chrome !== 'undefined' && chrome.runtime && !!chrome.runtime.id;
+}
+
+function showReloadRequiredBanner() {
+    if (document.getElementById('gpp-reload-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'gpp-reload-banner';
+    banner.style.cssText = `
+        position: fixed; top: 0; left: 0; width: 100%;
+        background-color: #f59e0b; color: #fff; text-align: center;
+        padding: 8px; z-index: 10000; font-family: sans-serif; font-weight: bold;
+    `;
+    banner.innerText = "Gmail Phishing Protector updated. Please refresh this page to continue.";
+
+    // Auto-remove after 10s to not annoy too much if it was a glitch
+    // But usually for context invalidation, it stays broken.
+    const close = document.createElement('span');
+    close.innerHTML = ' &times;';
+    close.style.cursor = 'pointer';
+    close.onclick = () => banner.remove();
+    banner.appendChild(close);
+
+    document.body.prepend(banner);
+}
+
+// Wrapper for sendMessage
+async function sendMessageToBackground(payload) {
+    if (!isExtensionContextValid()) {
+        console.warn("GPP: Extension context invalid. User must reload.");
+        showReloadRequiredBanner();
+        return null;
+    }
+
+    try {
+        return await chrome.runtime.sendMessage(payload);
+    } catch (error) {
+        if (error.message && (
+            error.message.includes("Extension context invalidated") ||
+            error.message.includes("invocation of sendMessage")
+        )) {
+            console.warn("GPP: Context invalidated during message send.");
+            showReloadRequiredBanner();
+        } else {
+            console.error("GPP: Unknown error sending message:", error);
+        }
+        return null;
+    }
+}
+
+
 // --- Extraction Helpers ---
 function extractSenderInfo() {
     // Gmail typically puts sender name in 'span.gD' and email in 'span.go' (sometimes hidden in attributes)
@@ -121,20 +176,16 @@ async function scanCurrentEmail() {
 
     console.log("Extracted Metadata:", { senderInfo, linksCount: links.length });
 
-    // Send to background
-    try {
-        const response = await chrome.runtime.sendMessage({
-            action: 'analyze_email',
-            text: emailBodyText.substring(0, 2000),
-            sender: senderInfo,
-            links: links
-        });
+    // Send to background safely
+    const response = await sendMessageToBackground({
+        action: 'analyze_email',
+        text: emailBodyText.substring(0, 2000),
+        sender: senderInfo,
+        links: links
+    });
 
-        if (response && response.isPhishing) {
-            showWarningBanner(response.reason);
-        }
-    } catch (err) {
-        console.error('GPP: Error communicating with background script:', err);
+    if (response && response.isPhishing) {
+        showWarningBanner(response.reason);
     }
 }
 
@@ -152,4 +203,4 @@ window.addEventListener('hashchange', () => {
     scanTimeout = setTimeout(scanCurrentEmail, CHECK_DELAY_MS);
 });
 
-console.log('Gmail Phishing Protector: Content script loaded (Enhanced Extraction).');
+console.log('Gmail Phishing Protector: Content script loaded (Robust Messaging).');
