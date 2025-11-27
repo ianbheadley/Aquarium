@@ -3,115 +3,83 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gmail Phishing Protector Settings</title>
+  <title>Gemini Phishing Checker Options</title>
   <style>
-    :root {
-      --primary-color: #0f172a;
-      --accent-color: #3b82f6;
-      --background-color: #f8fafc;
-      --text-color: #334155;
-      --border-color: #e2e8f0;
-    }
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background-color: var(--background-color);
-      color: var(--text-color);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      margin: 0;
-    }
-    .container {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-      width: 100%;
-      max-width: 480px;
+      font-family: 'Lato', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      background-color: #f9fafb;
     }
     h1 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      color: var(--primary-color);
-      margin-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border-color);
-      padding-bottom: 1rem;
-    }
-    .form-group {
-      margin-bottom: 1.25rem;
+      color: #1E3A8A;
+      font-size: 1.8rem;
+      margin-bottom: 20px;
     }
     label {
       display: block;
-      font-size: 0.875rem;
-      font-weight: 500;
-      margin-bottom: 0.5rem;
-      color: var(--primary-color);
+      font-size: 1rem;
+      color: #334155;
+      margin-bottom: 8px;
     }
     input[type="text"] {
       width: 100%;
-      padding: 0.625rem;
-      border: 1px solid var(--border-color);
-      border-radius: 6px;
-      font-size: 0.875rem;
-      box-sizing: border-box; /* Important for padding */
-      transition: border-color 0.15s ease-in-out;
+      padding: 10px;
+      font-size: 1rem;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-sizing: border-box;
     }
-    input[type="text"]:focus {
-      outline: none;
-      border-color: var(--accent-color);
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    .button-container {
+      display: flex;
+      gap: 10px; /* Spacing between buttons */
+      margin-bottom: 16px;
     }
     button {
-      width: 100%;
-      background-color: var(--primary-color);
+      padding: 12px 24px;
+      font-size: 1rem;
+      font-weight: 700;
       color: white;
+      background-image: linear-gradient(to right, #4FC3F7 0%, #5E35B1 51%, #4FC3F7 100%);
+      background-size: 200% auto;
       border: none;
-      padding: 0.75rem;
-      border-radius: 6px;
-      font-size: 0.875rem;
-      font-weight: 500;
+      border-radius: 8px;
       cursor: pointer;
-      transition: background-color 0.15s ease-in-out;
+      transition: all 0.3s ease;
+      flex-grow: 1; /* Make buttons take available space */
+    }
+    button#clearButton { /* Specific style for clear button */
+      background-image: linear-gradient(to right, #f87171 0%, #dc2626 51%, #f87171 100%);
     }
     button:hover {
-      background-color: #1e293b;
+      background-position: right center;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
-    .status {
-      margin-top: 1rem;
-      font-size: 0.875rem;
-      text-align: center;
-      height: 1.25rem;
+    #status {
+      margin-top: 16px;
+      font-size: 0.95rem;
+      color: #334155;
     }
-    .status.success {
-      color: #10b981;
+    .success {
+      color: #15803d;
     }
-    .status.error {
-      color: #ef4444;
-    }
-    .hint {
-      font-size: 0.75rem;
-      color: #64748b;
-      margin-top: 0.25rem;
+    .error {
+      color: #b91c1c;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Settings</h1>
-    <div class="form-group">
-      <label for="ollamaEndpoint">Ollama API Endpoint</label>
-      <input type="text" id="ollamaEndpoint" placeholder="http://localhost:11434">
-      <div class="hint">The base URL for your local Ollama instance.</div>
-    </div>
-    <div class="form-group">
-      <label for="ollamaModel">Model Name</label>
-      <input type="text" id="ollamaModel" placeholder="llava">
-      <div class="hint">Must support vision (e.g., llava, llama3.2-vision).</div>
-    </div>
-    <button id="save">Save Configuration</button>
-    <div id="status" class="status"></div>
+  <h1>Gemini Phishing Checker Setup</h1>
+  <label for="apiKey">Gemini API Key:</label>
+  <input type="text" id="apiKey" placeholder="Enter your Gemini API key" />
+  <div class="button-container">
+    <button id="saveButton">Save API Key</button>
+    <button id="clearButton">Clear API Key</button>
   </div>
+  <div id="status"></div>
   <script src="options.js"></script>
 </body>
 </html>
