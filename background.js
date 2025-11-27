@@ -12,9 +12,10 @@ async function getOllamaConfig() {
     };
 }
 
-function captureVisibleTabPromise() {
+function captureVisibleTabPromise(windowId) {
     return new Promise((resolve, reject) => {
-        chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
+        // We pass the specific windowId to be precise, though null (current) usually works
+        chrome.tabs.captureVisibleTab(windowId, { format: 'png' }, (dataUrl) => {
             if (chrome.runtime.lastError) {
                 reject(chrome.runtime.lastError);
             } else if (!dataUrl) {
@@ -106,13 +107,22 @@ Respond STRICTLY in JSON:
 // --- Message Handling ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'analyze_email') {
+
+        // STRICT SAFETY CHECK: Ensure we only process requests from Gmail
+        if (!sender.tab || !sender.tab.url || !sender.tab.url.startsWith('https://mail.google.com/')) {
+            console.warn("GPP: Blocked analysis request from unauthorized URL:", sender.tab ? sender.tab.url : "Unknown");
+            sendResponse({ isPhishing: false, reason: "Unauthorized Origin" });
+            return true;
+        }
+
         console.log("Received analysis request for tab:", sender.tab.id);
         setBadge("...", "#fbbf24"); // Yellow for processing
 
         (async () => {
             try {
                 // 1. Capture Screenshot
-                const screenshot = await captureVisibleTabPromise();
+                // Pass windowId to ensure we capture the correct window
+                const screenshot = await captureVisibleTabPromise(sender.tab.windowId);
 
                 // 2. Call Ollama with enhanced data
                 const analysis = await analyzeWithOllama(
@@ -135,7 +145,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             } catch (error) {
                 console.error("Error in analysis pipeline:", error);
                 setBadge("ERR", "#64748b"); // Gray
-                sendResponse({ isPhishing: false, reason: "Internal error" });
+                sendResponse({ isPhishing: false, reason: "Internal error: " + error.message });
             }
         })();
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gmail Phishing Protector",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Enterprise-grade phishing detection for Gmail using local AI models.",
   "permissions": [
     "tabs",
@@ -10,8 +10,7 @@
     "storage"
   ],
   "host_permissions": [
-    "*://mail.google.com/*",
-    "http://localhost/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
