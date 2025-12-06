@@ -1,131 +1,55 @@
+// background.js - Service Worker
+console.log('Aquarium Service Worker Loaded');
 
-// --- Configuration ---
-const DEFAULT_ENDPOINT = 'http://localhost:11434';
-const DEFAULT_MODEL = 'llava';
-
-// --- Helpers ---
-async function getOllamaConfig() {
-    const data = await chrome.storage.local.get(['ollamaEndpoint', 'ollamaModel']);
-    return {
-        endpoint: data.ollamaEndpoint || DEFAULT_ENDPOINT,
-        model: data.ollamaModel || DEFAULT_MODEL
-    };
-}
-
-function captureVisibleTabPromise() {
-    return new Promise((resolve, reject) => {
-        chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-            } else if (!dataUrl) {
-                reject(new Error("Empty screenshot"));
-            } else {
-                resolve(dataUrl);
-            }
-        });
-    });
-}
-
-// --- Analysis ---
-async function analyzeWithOllama(text, screenshotDataUrl, sender, links) {
-    const config = await getOllamaConfig();
-    const base64Image = screenshotDataUrl.split(',')[1];
-
-    // Format the list of links for the prompt
-    const linksList = links && links.length > 0 ? links.join(', ') : "No links found";
-    const senderStr = sender ? `Name: "${sender.name}", Email: "${sender.email}"` : "Unknown";
-
-    const prompt = `You are a cybersecurity expert. Analyze this email for phishing.
-
-DATA:
-- Sender: ${senderStr}
-- Links present in body: [${linksList}]
-- Email Text Start: "${text.replace(/\n/g, ' ').substring(0, 300)}..."
-
-INSTRUCTIONS:
-Perform a Step-by-Step analysis:
-1. SENDER CHECK: Does the sender's email domain match the company they claim to be (in the text/screenshot)? (e.g. "Amazon Support" using @gmail.com is PHISHING).
-2. LINK CHECK: Do the links point to the official domain of the sender? (e.g. claiming "Netflix" but linking to "update-netflix-account.com" is PHISHING).
-3. URGENCY CHECK: Is there artificial urgency (e.g. "Account suspended", "24 hours to reply")?
-
-DECISION RULES:
-- IF Sender Domain is generic (@gmail, @yahoo) but claims to be a big corporation -> PHISHING (YES).
-- IF Links go to suspicious domains unrelated to the sender -> PHISHING (YES).
-- IF Branding looks legitimate AND links go to the official domain -> SAFE (NO).
-
-Respond STRICTLY in JSON:
-{
-    "isPhishing": boolean,
-    "reason": "Concise explanation focusing on the specific mismatch (Sender/Link/Content)."
-}`;
-
-    try {
-        const response = await fetch(`${config.endpoint}/api/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: config.model,
-                prompt: prompt,
-                images: [base64Image],
-                stream: false,
-                format: "json"
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Ollama API Error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log("Ollama Raw Response:", data.response);
-
-        try {
-            const result = JSON.parse(data.response);
-            return result;
-        } catch (parseError) {
-            console.warn("Failed to parse JSON from Ollama, attempting heuristic parsing:", data.response);
-            const text = data.response.toLowerCase();
-            return {
-                isPhishing: text.includes('true') || text.includes('yes'),
-                reason: data.response.replace(/[{}]/g, '').trim()
-            };
-        }
-
-    } catch (error) {
-        console.error("Analysis failed:", error);
-        return { isPhishing: false, reason: "Analysis failed: " + error.message };
-    }
-}
-
-// --- Message Handling ---
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'analyze_email') {
-        console.log("Received analysis request for tab:", sender.tab.id);
-
-        (async () => {
-            try {
-                // 1. Capture Screenshot
-                const screenshot = await captureVisibleTabPromise();
-
-                // 2. Call Ollama with enhanced data
-                const analysis = await analyzeWithOllama(
-                    message.text,
-                    screenshot,
-                    message.sender,
-                    message.links
-                );
-
-                // 3. Return Result
-                sendResponse(analysis);
-
-            } catch (error) {
-                console.error("Error in analysis pipeline:", error);
-                sendResponse({ isPhishing: false, reason: "Internal error" });
-            }
-        })();
-
-        return true; // Keep channel open for async response
-    }
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('Aquarium installed.');
 });
 
-console.log("Gmail Phishing Protector: Background service worker loaded.");
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'credentialDetected') {
+    console.log('Credential detected at:', message.url, message.rect);
+    analyzePage(message.url);
+  }
+});
+
+async function analyzePage(url) {
+  // Prototype Ollama integration
+  console.log('Analyzing page:', url);
+
+  // Get settings
+  const settings = await chrome.storage.sync.get(['modelName']);
+  const model = settings.modelName || 'qwen2.5-vl:7b';
+
+  const prompt = `Analyze this URL for phishing: ${url}. Return JSON: {is_phishing: bool, reason: str, confidence: num}`;
+
+  try {
+    const response = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        prompt: prompt,
+        stream: false,
+        format: "json"
+      })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log('Ollama analysis result:', data.response);
+
+    // Parse the JSON response from the model
+    try {
+        const result = JSON.parse(data.response);
+        console.log('Parsed result:', result);
+    } catch (e) {
+        console.warn('Failed to parse model JSON:', e);
+    }
+
+  } catch (error) {
+    console.error('Analysis failed:', error);
+  }
+}
