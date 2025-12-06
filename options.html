@@ -1,117 +1,38 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gmail Phishing Protector Settings</title>
+  <title>Aquarium Options</title>
   <style>
-    :root {
-      --primary-color: #0f172a;
-      --accent-color: #3b82f6;
-      --background-color: #f8fafc;
-      --text-color: #334155;
-      --border-color: #e2e8f0;
-    }
-    body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background-color: var(--background-color);
-      color: var(--text-color);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      margin: 0;
-    }
-    .container {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-      width: 100%;
-      max-width: 480px;
-    }
-    h1 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      color: var(--primary-color);
-      margin-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border-color);
-      padding-bottom: 1rem;
-    }
-    .form-group {
-      margin-bottom: 1.25rem;
-    }
-    label {
-      display: block;
-      font-size: 0.875rem;
-      font-weight: 500;
-      margin-bottom: 0.5rem;
-      color: var(--primary-color);
-    }
-    input[type="text"] {
-      width: 100%;
-      padding: 0.625rem;
-      border: 1px solid var(--border-color);
-      border-radius: 6px;
-      font-size: 0.875rem;
-      box-sizing: border-box; /* Important for padding */
-      transition: border-color 0.15s ease-in-out;
-    }
-    input[type="text"]:focus {
-      outline: none;
-      border-color: var(--accent-color);
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-    }
-    button {
-      width: 100%;
-      background-color: var(--primary-color);
-      color: white;
-      border: none;
-      padding: 0.75rem;
-      border-radius: 6px;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background-color 0.15s ease-in-out;
-    }
-    button:hover {
-      background-color: #1e293b;
-    }
-    .status {
-      margin-top: 1rem;
-      font-size: 0.875rem;
-      text-align: center;
-      height: 1.25rem;
-    }
-    .status.success {
-      color: #10b981;
-    }
-    .status.error {
-      color: #ef4444;
-    }
-    .hint {
-      font-size: 0.75rem;
-      color: #64748b;
-      margin-top: 0.25rem;
-    }
+    body { font-family: 'Inter', sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+    h1 { color: #333; }
+    .section { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+    label { display: block; margin-bottom: 10px; }
+    button { padding: 8px 16px; cursor: pointer; }
+    #status { margin-top: 10px; font-weight: bold; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Settings</h1>
-    <div class="form-group">
-      <label for="ollamaEndpoint">Ollama API Endpoint</label>
-      <input type="text" id="ollamaEndpoint" placeholder="http://localhost:11434">
-      <div class="hint">The base URL for your local Ollama instance.</div>
-    </div>
-    <div class="form-group">
-      <label for="ollamaModel">Model Name</label>
-      <input type="text" id="ollamaModel" placeholder="llava">
-      <div class="hint">Must support vision (e.g., llava, llama3.2-vision).</div>
-    </div>
-    <button id="save">Save Configuration</button>
-    <div id="status" class="status"></div>
+  <h1>Aquarium Configuration</h1>
+  <div class="section">
+    <h2>Privacy Mode</h2>
+    <label><input type="radio" name="privacy" value="max_privacy" checked> Max Privacy (Local Only)</label>
+    <label><input type="radio" name="privacy" value="balanced"> Balanced (Local + Opt-in Cloud)</label>
+    <label><input type="radio" name="privacy" value="max_protection"> Max Protection (Cloud Preferred)</label>
   </div>
+
+  <div class="section">
+    <h2>Local AI Model (Ollama)</h2>
+    <label>Model Name: <input type="text" id="modelName" value="qwen2.5-vl:7b"></label>
+    <button id="testOllama">Test Ollama Connection</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="section">
+    <h2>Cloud Stub (Vertex AI)</h2>
+    <label>API Key: <input type="password" id="apiKey"></label>
+  </div>
+
+  <button id="save">Save Settings</button>
   <script src="options.js"></script>
 </body>
 </html>
