@@ -26,7 +26,7 @@ async function setupOffscreenDocument(path) {
 export const Capture = {
   async captureScreenshot(tabId) {
     try {
-        const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'jpeg', quality: 0.8 });
+        const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'jpeg', quality: 80 });
         return dataUrl;
     } catch (e) {
         console.error("Screenshot failed:", e);
