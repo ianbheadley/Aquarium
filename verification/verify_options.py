@@ -1,5 +1,5 @@
 
-from playwright.sync_api import sync_playwright, expect
+from playwright.sync_api import sync_playwright
 import os
 
 def verify_options_page():
@@ -7,22 +7,23 @@ def verify_options_page():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        # Load the options page from the local file
-        options_path = os.path.abspath("options.html")
-        page.goto(f"file://{options_path}")
+        # Load the local options.html file
+        options_path = os.path.abspath('options.html')
+        page.goto(f'file://{options_path}')
 
         # Verify title
-        expect(page).to_have_title("Gmail Phishing Protector Settings")
+        assert page.title() == 'Aquarium Options'
 
-        # Verify inputs
-        expect(page.locator("#ollamaEndpoint")).to_be_visible()
-        expect(page.locator("#ollamaModel")).to_be_visible()
-        expect(page.locator("#save")).to_be_visible()
+        # Verify sections
+        assert page.is_visible('text=Privacy Mode')
+        assert page.is_visible('text=Local AI Model (Ollama)')
+        assert page.is_visible('text=Cloud Stub (Vertex AI)')
 
-        # Take screenshot
-        page.screenshot(path="verification/options_page.png")
-        print("Options page screenshot captured.")
+        # Verify Test Button
+        assert page.is_visible('#testOllama')
 
+        # Screenshot
+        page.screenshot(path='verification/options_page.png')
         browser.close()
 
 if __name__ == "__main__":

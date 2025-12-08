@@ -1,131 +1,118 @@
+// background.js - Service Worker
+import { Rules } from './rules.js';
+import { Routing } from './routing.js';
+import { Capture } from './capture.js';
+import { Cloud } from './cloud.js';
+import { Cache } from './cache.js';
 
-// --- Configuration ---
-const DEFAULT_ENDPOINT = 'http://localhost:11434';
-const DEFAULT_MODEL = 'llava';
+console.log('Aquarium Service Worker Loaded');
 
-// --- Helpers ---
-async function getOllamaConfig() {
-    const data = await chrome.storage.local.get(['ollamaEndpoint', 'ollamaModel']);
-    return {
-        endpoint: data.ollamaEndpoint || DEFAULT_ENDPOINT,
-        model: data.ollamaModel || DEFAULT_MODEL
-    };
-}
-
-function captureVisibleTabPromise() {
-    return new Promise((resolve, reject) => {
-        chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-            } else if (!dataUrl) {
-                reject(new Error("Empty screenshot"));
-            } else {
-                resolve(dataUrl);
-            }
-        });
-    });
-}
-
-// --- Analysis ---
-async function analyzeWithOllama(text, screenshotDataUrl, sender, links) {
-    const config = await getOllamaConfig();
-    const base64Image = screenshotDataUrl.split(',')[1];
-
-    // Format the list of links for the prompt
-    const linksList = links && links.length > 0 ? links.join(', ') : "No links found";
-    const senderStr = sender ? `Name: "${sender.name}", Email: "${sender.email}"` : "Unknown";
-
-    const prompt = `You are a cybersecurity expert. Analyze this email for phishing.
-
-DATA:
-- Sender: ${senderStr}
-- Links present in body: [${linksList}]
-- Email Text Start: "${text.replace(/\n/g, ' ').substring(0, 300)}..."
-
-INSTRUCTIONS:
-Perform a Step-by-Step analysis:
-1. SENDER CHECK: Does the sender's email domain match the company they claim to be (in the text/screenshot)? (e.g. "Amazon Support" using @gmail.com is PHISHING).
-2. LINK CHECK: Do the links point to the official domain of the sender? (e.g. claiming "Netflix" but linking to "update-netflix-account.com" is PHISHING).
-3. URGENCY CHECK: Is there artificial urgency (e.g. "Account suspended", "24 hours to reply")?
-
-DECISION RULES:
-- IF Sender Domain is generic (@gmail, @yahoo) but claims to be a big corporation -> PHISHING (YES).
-- IF Links go to suspicious domains unrelated to the sender -> PHISHING (YES).
-- IF Branding looks legitimate AND links go to the official domain -> SAFE (NO).
-
-Respond STRICTLY in JSON:
-{
-    "isPhishing": boolean,
-    "reason": "Concise explanation focusing on the specific mismatch (Sender/Link/Content)."
-}`;
-
-    try {
-        const response = await fetch(`${config.endpoint}/api/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: config.model,
-                prompt: prompt,
-                images: [base64Image],
-                stream: false,
-                format: "json"
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Ollama API Error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log("Ollama Raw Response:", data.response);
-
-        try {
-            const result = JSON.parse(data.response);
-            return result;
-        } catch (parseError) {
-            console.warn("Failed to parse JSON from Ollama, attempting heuristic parsing:", data.response);
-            const text = data.response.toLowerCase();
-            return {
-                isPhishing: text.includes('true') || text.includes('yes'),
-                reason: data.response.replace(/[{}]/g, '').trim()
-            };
-        }
-
-    } catch (error) {
-        console.error("Analysis failed:", error);
-        return { isPhishing: false, reason: "Analysis failed: " + error.message };
-    }
-}
-
-// --- Message Handling ---
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'analyze_email') {
-        console.log("Received analysis request for tab:", sender.tab.id);
-
-        (async () => {
-            try {
-                // 1. Capture Screenshot
-                const screenshot = await captureVisibleTabPromise();
-
-                // 2. Call Ollama with enhanced data
-                const analysis = await analyzeWithOllama(
-                    message.text,
-                    screenshot,
-                    message.sender,
-                    message.links
-                );
-
-                // 3. Return Result
-                sendResponse(analysis);
-
-            } catch (error) {
-                console.error("Error in analysis pipeline:", error);
-                sendResponse({ isPhishing: false, reason: "Internal error" });
-            }
-        })();
-
-        return true; // Keep channel open for async response
-    }
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('Aquarium installed.');
 });
 
-console.log("Gmail Phishing Protector: Background service worker loaded.");
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'credentialDetected') {
+    console.log('Credential detected at:', message.url);
+    // Use sender.tab.id for capture operations
+    analyzePage(message.url, sender.tab.id);
+  } else if (message.action === 'trustPage') {
+    console.log('User trusted page:', message.url);
+    Cache.addSafe(message.url);
+  }
+});
+
+async function analyzePage(url, tabId) {
+  // 1. Instant Rules
+  const ruleResult = await Rules.run(url);
+  if (ruleResult.result === 'safe') {
+      console.log('Rules verdict: SAFE');
+      return;
+  }
+  if (ruleResult.result === 'suspicious') {
+      console.warn('Rules verdict: SUSPICIOUS', ruleResult.reason);
+      // We could trigger shield immediately or continue to confirm with AI
+      // Plan says "Flag if any hit". For now, we continue to AI for confirmation/details,
+      // or we could mark as high priority.
+  }
+
+  // 2. Cache Check
+  if (await Cache.isSafe(url)) {
+      console.log('Cache verdict: SAFE');
+      return;
+  }
+
+  // 3. Routing
+  const route = await Routing.determineRoute(url);
+
+  // 4. Data Capture
+  console.log('Capturing page data...');
+  const textContent = await Capture.getPageContent(tabId);
+  const rawScreenshot = await Capture.captureScreenshot(tabId);
+  const resizedScreenshot = await Capture.resizeScreenshot(rawScreenshot);
+
+  // 5. Analysis
+  let verdict;
+  if (route === 'cloud') {
+      verdict = await Cloud.analyze(url, textContent.text, resizedScreenshot);
+  } else {
+      verdict = await analyzeLocal(url, textContent.text, resizedScreenshot);
+  }
+
+  console.log('Final Verdict:', verdict);
+
+  // 6. Act on Verdict
+  if (verdict && verdict.is_phishing === false) {
+      await Cache.addSafe(url);
+  } else if (verdict && verdict.is_phishing === true) {
+      console.warn('PHISHING DETECTED! Triggering shield...');
+      chrome.tabs.sendMessage(tabId, {
+          action: 'showShield',
+          reason: verdict.reason,
+          confidence: verdict.confidence
+      });
+  }
+}
+
+async function analyzeLocal(url, text, screenshot) {
+  console.log('Running Local Analysis (Ollama)...');
+  const settings = await chrome.storage.sync.get(['modelName']);
+  const model = settings.modelName || 'qwen2.5-vl:7b';
+
+  // Construct prompt. For multimodal, we need to adapt depending on Ollama API support for images in /api/generate
+  // qwen2.5-vl supports images.
+
+  const prompt = `Analyze this phishing suspect. URL: ${url}. Page Text: ${text}. Return JSON: {is_phishing: bool, reason: str, confidence: num}`;
+
+  const requestBody = {
+    model: model,
+    prompt: prompt,
+    stream: false,
+    format: "json"
+  };
+
+  if (screenshot) {
+      // Ollama expects base64 string in "images" array
+      // Remove header "data:image/jpeg;base64,"
+      const base64Data = screenshot.split(',')[1];
+      requestBody.images = [base64Data];
+  }
+
+  try {
+    const response = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return JSON.parse(data.response);
+  } catch (error) {
+    console.error('Local analysis failed:', error);
+    return { error: error.message };
+  }
+}

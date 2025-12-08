@@ -1,155 +1,213 @@
+// content.js - Credential Trigger & Shield
 
-// --- Configuration ---
-const CHECK_DELAY_MS = 2000; // Wait for email to render
+function checkForCredentials(node) {
+  if (node.nodeType !== Node.ELEMENT_NODE) return;
 
-// --- Extraction Helpers ---
-function extractSenderInfo() {
-    // Gmail typically puts sender name in 'span.gD' and email in 'span.go' (sometimes hidden in attributes)
-    // Or inside <span class="gD" email="example@com">Name</span>
-    const senderElement = document.querySelector('span.gD');
-    if (!senderElement) return { name: 'Unknown', email: 'Unknown' };
+  const inputs = node.querySelectorAll('input[type="password"], input[type="email"]');
+  if (inputs.length > 0) {
+    // Found credentials!
+    console.log('Aquarium: Credential form detected!');
 
-    const name = senderElement.innerText || senderElement.textContent;
-    const email = senderElement.getAttribute('email') || 'Unknown';
-    return { name, email };
-}
+    // Find the nearest form or container
+    let target = inputs[0].closest('form');
+    if (!target) {
+        // If no form tag, might be a div container. Use the input's parent or the input itself.
+        target = inputs[0];
+    }
 
-function extractLinks() {
-    const links = [];
-    const messageBodies = document.querySelectorAll('.a3s');
-    messageBodies.forEach(el => {
-        if (el.offsetParent !== null) {
-             const anchors = el.querySelectorAll('a');
-             anchors.forEach(a => {
-                 try {
-                     if (a.href && !a.href.startsWith('mailto:')) {
-                         const url = new URL(a.href);
-                         links.push(url.hostname);
-                     }
-                 } catch (e) { /* Ignore invalid URLs */ }
-             });
-        }
-    });
-    // Dedup
-    return [...new Set(links)];
-}
+    const rect = target.getBoundingClientRect();
 
-// --- Banner Injection ---
-function showWarningBanner(reason) {
-  if (document.getElementById('gmail-phishing-protector-banner')) return;
-
-  const subjectHeader = document.querySelector('div.ha') || document.querySelector('h2');
-
-  const banner = document.createElement('div');
-  banner.id = 'gmail-phishing-protector-banner';
-  banner.style.cssText = `
-    background-color: #fef2f2;
-    border: 1px solid #ef4444;
-    color: #991b1b;
-    padding: 16px;
-    margin: 10px 20px;
-    border-radius: 6px;
-    font-family: 'Inter', sans-serif;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    z-index: 9999;
-    position: relative;
-  `;
-
-  banner.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-      <line x1="12" y1="9" x2="12" y2="13"></line>
-      <line x1="12" y1="17" x2="12.01" y2="17"></line>
-    </svg>
-    <div style="flex: 1;">
-      <h3 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #7f1d1d;">Potential Phishing Detected</h3>
-      <p style="margin: 0; font-size: 14px; line-height: 1.5;">We believe this to be a phishing email.</p>
-      <p style="margin: 4px 0 0 0; font-size: 13px; color: #b91c1c;"><strong>Reason:</strong> ${reason}</p>
-    </div>
-    <button id="gpp-dismiss" style="background: transparent; border: none; color: #991b1b; cursor: pointer; font-size: 20px;">&times;</button>
-  `;
-
-  if (subjectHeader && subjectHeader.parentElement) {
-      subjectHeader.parentElement.insertBefore(banner, subjectHeader.nextSibling);
-  } else {
-      const main = document.querySelector('[role="main"]');
-      if (main) {
-          main.insertBefore(banner, main.firstChild);
-      } else {
-          document.body.prepend(banner);
+    chrome.runtime.sendMessage({
+      action: 'credentialDetected',
+      url: window.location.href,
+      rect: {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+        bottom: rect.bottom,
+        right: rect.right,
+        x: rect.x,
+        y: rect.y
       }
-  }
-
-  document.getElementById('gpp-dismiss').onclick = () => banner.remove();
-}
-
-// --- Scanning Logic ---
-let lastCheckedUrl = '';
-
-async function scanCurrentEmail() {
-    const hash = window.location.hash;
-    if (!hash || (!hash.includes('inbox/') && !hash.includes('category/') && !hash.includes('label/'))) {
-        return;
-    }
-
-    if (window.location.href === lastCheckedUrl) {
-        return;
-    }
-
-    console.log('GPP: New email view detected, initiating scan...');
-    lastCheckedUrl = window.location.href;
-
-    // Extract text content
-    let emailBodyText = '';
-    const messageBodies = document.querySelectorAll('.a3s');
-    messageBodies.forEach(el => {
-        if (el.offsetParent !== null) {
-             emailBodyText += el.innerText + '\n';
-        }
     });
-
-    if (!emailBodyText.trim()) {
-        const main = document.querySelector('[role="main"]');
-        if (main) emailBodyText = main.innerText;
-    }
-
-    const senderInfo = extractSenderInfo();
-    const links = extractLinks();
-
-    console.log("Extracted Metadata:", { senderInfo, linksCount: links.length });
-
-    // Send to background
-    try {
-        const response = await chrome.runtime.sendMessage({
-            action: 'analyze_email',
-            text: emailBodyText.substring(0, 2000),
-            sender: senderInfo,
-            links: links
-        });
-
-        if (response && response.isPhishing) {
-            showWarningBanner(response.reason);
-        }
-    } catch (err) {
-        console.error('GPP: Error communicating with background script:', err);
-    }
+  }
 }
 
-// --- Observer ---
-let scanTimeout;
-const observer = new MutationObserver(() => {
-    clearTimeout(scanTimeout);
-    scanTimeout = setTimeout(scanCurrentEmail, CHECK_DELAY_MS);
+// Initial check
+checkForCredentials(document.body);
+
+// Observer for dynamic changes
+const observer = new MutationObserver((mutations) => {
+  mutations.forEach((mutation) => {
+    mutation.addedNodes.forEach((node) => {
+      checkForCredentials(node);
+    });
+  });
 });
 
-observer.observe(document.body, { childList: true, subtree: true });
-
-window.addEventListener('hashchange', () => {
-    clearTimeout(scanTimeout);
-    scanTimeout = setTimeout(scanCurrentEmail, CHECK_DELAY_MS);
+observer.observe(document.body, {
+  childList: true,
+  subtree: true
 });
 
-console.log('Gmail Phishing Protector: Content script loaded (Enhanced Extraction).');
+// Shield Logic
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'showShield') {
+    createShield(message.reason, message.confidence);
+  }
+});
+
+function createShield(reason, confidence) {
+  if (document.getElementById('aquarium-shield-host')) return;
+
+  const host = document.createElement('div');
+  host.id = 'aquarium-shield-host';
+  host.style.position = 'fixed';
+  host.style.top = '0';
+  host.style.left = '0';
+  host.style.width = '100vw';
+  host.style.height = '100vh';
+  host.style.zIndex = '2147483647'; // Max z-index
+  host.style.pointerEvents = 'auto';
+
+  const shadow = host.attachShadow({ mode: 'closed' });
+
+  const style = document.createElement('style');
+  style.textContent = `
+    :host {
+      all: initial;
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    .overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(220, 38, 38, 0.95);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      backdrop-filter: blur(10px);
+    }
+    h1 {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      font-weight: 800;
+    }
+    p {
+      font-size: 1.5rem;
+      margin-bottom: 2rem;
+      max-width: 600px;
+      line-height: 1.4;
+    }
+    .reason {
+      background: rgba(0,0,0,0.2);
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 2rem;
+      font-family: monospace;
+    }
+    .actions {
+      display: flex;
+      gap: 1rem;
+    }
+    button {
+      padding: 1rem 2rem;
+      font-size: 1.2rem;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: transform 0.1s;
+    }
+    button:active {
+      transform: scale(0.98);
+    }
+    .btn-escape {
+      background: white;
+      color: #dc2626;
+    }
+    .btn-trust {
+      background: transparent;
+      border: 2px solid white;
+      color: white;
+    }
+  `;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+
+  // Create elements safely
+  const title = document.createElement('h1');
+  title.textContent = '⚠️ Phishing Suspected';
+
+  const msg = document.createElement('p');
+  msg.textContent = 'Aquarium has detected potential phishing activity on this page.';
+
+  const reasonBox = document.createElement('div');
+  reasonBox.className = 'reason';
+
+  const reasonStrong = document.createElement('strong');
+  reasonStrong.textContent = 'Reason: ';
+
+  const reasonText = document.createTextNode(reason || 'Unknown');
+
+  const br = document.createElement('br');
+
+  const confStrong = document.createElement('strong');
+  confStrong.textContent = 'Confidence: ';
+
+  const confText = document.createTextNode(confidence ? (confidence * 100).toFixed(0) + '%' : 'N/A');
+
+  reasonBox.appendChild(reasonStrong);
+  reasonBox.appendChild(reasonText);
+  reasonBox.appendChild(br);
+  reasonBox.appendChild(confStrong);
+  reasonBox.appendChild(confText);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const btnEscape = document.createElement('button');
+  btnEscape.className = 'btn-escape';
+  btnEscape.id = 'escape';
+  btnEscape.textContent = 'Go Back (Recommended)';
+
+  const btnTrust = document.createElement('button');
+  btnTrust.className = 'btn-trust';
+  btnTrust.id = 'trust';
+  btnTrust.textContent = 'I Trust This Page';
+
+  actions.appendChild(btnEscape);
+  actions.appendChild(btnTrust);
+
+  overlay.appendChild(title);
+  overlay.appendChild(msg);
+  overlay.appendChild(reasonBox);
+  overlay.appendChild(actions);
+
+  shadow.appendChild(style);
+  shadow.appendChild(overlay);
+
+  // Event Listeners
+  btnEscape.addEventListener('click', () => {
+    window.history.back();
+    setTimeout(() => window.close(), 500); // Fallback if history.back fails or is empty
+  });
+
+  btnTrust.addEventListener('click', () => {
+    host.remove();
+    // Ideally, send message to background to whitelist this URL
+    chrome.runtime.sendMessage({ action: 'trustPage', url: window.location.href });
+  });
+
+  document.body.appendChild(host);
+
+  // Lock scroll
+  document.body.style.overflow = 'hidden';
+}
