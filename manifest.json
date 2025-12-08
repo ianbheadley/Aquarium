@@ -3,24 +3,30 @@
   "name": "Aquarium",
   "version": "1.0.0",
   "description": "Privacy-first credential-phishing prevention tool.",
+  "icons": {
+    "128": "images/icon128.png"
+  },
   "permissions": [
     "tabs",
     "storage",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>",
     "http://localhost:11434/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "options_ui": {
