@@ -7,7 +7,7 @@ import { Cache } from './cache.js';
 
 console.log('Aquarium Service Worker Loaded');
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
   console.log('Aquarium installed.');
 });
 
