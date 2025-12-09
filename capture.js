@@ -13,11 +13,19 @@ async function setupOffscreenDocument(path) {
 
   // Create offscreen document
   if (chrome.offscreen) { // Check if API exists
+    try {
       await chrome.offscreen.createDocument({
         url: path,
         reasons: ['BLOBS'],
         justification: 'Resize screenshot for AI analysis',
       });
+    } catch (e) {
+      if (e.message.includes('Only a single offscreen document may be created')) {
+        // Ignore this error, it means we raced and another flow created it first
+        return;
+      }
+      throw e;
+    }
   } else {
       console.warn("chrome.offscreen API not available.");
   }
@@ -26,7 +34,8 @@ async function setupOffscreenDocument(path) {
 export const Capture = {
   async captureScreenshot(tabId) {
     try {
-        const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'jpeg', quality: 0.8 });
+        const tab = await chrome.tabs.get(tabId);
+        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 80 });
         return dataUrl;
     } catch (e) {
         console.error("Screenshot failed:", e);
