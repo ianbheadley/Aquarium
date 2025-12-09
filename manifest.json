@@ -11,7 +11,8 @@
     "storage",
     "scripting",
     "activeTab",
-    "offscreen"
+    "offscreen",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -21,6 +22,15 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "net_rules.json"
+      }
+    ]
   },
   "content_scripts": [
     {
