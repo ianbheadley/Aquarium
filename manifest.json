@@ -15,7 +15,8 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "http://localhost:11434/*"
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -34,6 +35,6 @@
     "open_in_tab": true
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; connect-src 'self' http://localhost:11434 https://generativelanguage.googleapis.com https: http:"
+    "extension_pages": "script-src 'self'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434 https://generativelanguage.googleapis.com https: http:"
   }
 }
