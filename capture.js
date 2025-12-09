@@ -13,11 +13,19 @@ async function setupOffscreenDocument(path) {
 
   // Create offscreen document
   if (chrome.offscreen) { // Check if API exists
+    try {
       await chrome.offscreen.createDocument({
         url: path,
         reasons: ['BLOBS'],
         justification: 'Resize screenshot for AI analysis',
       });
+    } catch (e) {
+      if (e.message.includes('Only a single offscreen document may be created')) {
+        // Ignore this error, it means we raced and another flow created it first
+        return;
+      }
+      throw e;
+    }
   } else {
       console.warn("chrome.offscreen API not available.");
   }
