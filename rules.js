@@ -4,7 +4,7 @@
 const KNOWN_GOOD_DOMAINS = new Set([
   'google.com', 'facebook.com', 'amazon.com', 'apple.com', 'microsoft.com',
   'github.com', 'stackoverflow.com', 'wikipedia.org', 'twitter.com', 'linkedin.com',
-  'localhost'
+  'localhost', 'huffpost.com'
 ]);
 
 // Prototype list of target brands for typosquatting

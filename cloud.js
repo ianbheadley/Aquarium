@@ -45,7 +45,8 @@ export const Cloud = {
         });
 
         if (!response.ok) {
-            throw new Error(`Cloud API Error: ${response.statusText}`);
+            const errorBody = await response.text();
+            throw new Error(`Cloud API Error: ${response.status} ${response.statusText} - ${errorBody}`);
         }
 
         const data = await response.json();
